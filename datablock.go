@@ -14,6 +14,7 @@ type DataBlock struct {
 	currentCount  int
 	complete      bool
 	canDecode     bool
+	unackedCount  int
 	mutex         sync.Mutex
 	fragments     []*DataFragment
 }
@@ -50,6 +51,7 @@ func NewDataBlockFromEncodedData(ed *EncodedData, blockID int) *DataBlock {
 		db.fragments[i] = fragment
 	}
 	db.currentCount = db.fragmentCount
+	db.unackedCount = db.fragmentCount
 	db.complete = true
 	db.canDecode = true
 	return db
@@ -69,6 +71,18 @@ func NewDataBlockFromFragment(frag *DataFragment) *DataBlock {
 	db.InsertFragment(frag)
 	return db
 }
+func (db *DataBlock) AcknowledgeFragment(f *DataFragment) {
+	if db.blockID != f.blockID {
+		return
+	}
+	if f.fragmentID < db.fragmentCount {
+		if !db.fragments[f.fragmentID].acked {
+			db.fragments[f.fragmentID].acked = true
+			db.unackedCount--
+		}
+	}
+
+}
 
 func (db *DataBlock) InsertFragment(fragment *DataFragment) (bool, error) {
 	db.mutex.Lock()
@@ -82,6 +96,7 @@ func (db *DataBlock) InsertFragment(fragment *DataFragment) (bool, error) {
 	if db.fragments[fragment.fragmentID] == nil {
 		db.fragments[fragment.fragmentID] = fragment
 		db.currentCount++
+		db.unackedCount++
 		if db.currentCount == db.fragmentCount-db.parityCount {
 			db.canDecode = true
 		}
@@ -136,6 +151,7 @@ type DataFragment struct {
 	fragmentCount int
 	parityCount   int
 	padlen        int
+	acked         bool
 	data          []byte
 }
 
@@ -165,6 +181,7 @@ func NewFragmentFromBytes(data []byte) (*DataFragment, error) {
 		fragmentCount: int(data[4]),
 		parityCount:   int(data[5]),
 		padlen:        int(binary.BigEndian.Uint16(data[6:8])),
+		acked:         false,
 		data:          data,
 	}, nil
 }
