@@ -13,12 +13,12 @@ func TestEncodeDecode(t *testing.T) {
 		t.Error("error reading test image")
 	}
 	inHash := md5.Sum(in)
-	splitData, err := Split(in, 5555)
+	splitData, err := Split(in, 999)
 	if err != nil {
 		t.Error("error splitting data")
 	}
 	parityCount := 3
-	reedSolomon, err := NewReedSolomon(splitData.nFragment, parityCount)
+	reedSolomon, err := NewReedSolomon(splitData.fragmentCount, parityCount)
 	if err != nil {
 		t.Error("error creating encoder:", err)
 		return

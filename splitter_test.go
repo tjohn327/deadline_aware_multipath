@@ -14,14 +14,14 @@ func TestSplit(t *testing.T) {
 	inHash := md5.Sum(in)
 	s, err := Split(in, 999)
 	if err != nil {
-		t.Error("error splitting data")
+		t.Error("error splitting data: ", err)
 	}
-	if s.nFragment != 776 {
-		t.Errorf("wrong number of fragments, expected %d got %d", 776, s.nFragment)
+	if s.fragmentCount != 191 {
+		t.Errorf("wrong number of fragments, expected %d got %d", 191, s.fragmentCount)
 	}
 
-	if s.padlen != 592 {
-		t.Errorf("wrong pad length, expected %d got %d", 592, s.padlen)
+	if s.padlen != 659 {
+		t.Errorf("wrong pad length, expected %d got %d", 659, s.padlen)
 	}
 	out, err := s.Join()
 	if err != nil {

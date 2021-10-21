@@ -32,13 +32,13 @@ func NewReedSolomon(dataCount int, parityCount int) (*ReedSolomon, error) {
 }
 
 func (r *ReedSolomon) Encode(sd *SplitData, parityCount int) (*EncodedData, error) {
-	if sd.nFragment != r.dataCount || r.parityCount != parityCount {
-		enc, err := reedsolomon.New(sd.nFragment, parityCount)
+	if sd.fragmentCount != r.dataCount || r.parityCount != parityCount {
+		enc, err := reedsolomon.New(sd.fragmentCount, parityCount)
 		if err != nil {
 			return nil, err
 		}
 		r.encoder = enc
-		r.dataCount = sd.nFragment
+		r.dataCount = sd.fragmentCount
 		r.parityCount = parityCount
 	}
 	data := sd.data
@@ -52,7 +52,7 @@ func (r *ReedSolomon) Encode(sd *SplitData, parityCount int) (*EncodedData, erro
 		return nil, err
 	}
 	return &EncodedData{
-		dataCount:   sd.nFragment,
+		dataCount:   sd.fragmentCount,
 		parityCount: parityCount,
 		fragSize:    sd.fragSize,
 		padlen:      sd.padlen,
@@ -74,11 +74,14 @@ func (r *ReedSolomon) Decode(ed *EncodedData) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if ed.fragSize == 0 {
+		ed.fragSize = len(ed.data[0])
+	}
 	splitData := &SplitData{
-		fragSize:  ed.fragSize,
-		padlen:    ed.padlen,
-		nFragment: ed.dataCount,
-		data:      ed.data[:ed.dataCount],
+		fragSize:      ed.fragSize,
+		padlen:        ed.padlen,
+		fragmentCount: ed.dataCount,
+		data:          ed.data[:ed.dataCount],
 	}
 	out, err := splitData.Join()
 	if err != nil {

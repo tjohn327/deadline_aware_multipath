@@ -2,14 +2,22 @@ package main
 
 import "fmt"
 
+const (
+	MAX_FRAG_SIZE = 1200
+)
+
 type SplitData struct {
-	fragSize  int
-	padlen    int
-	nFragment int
-	data      [][]byte
+	fragSize      int
+	padlen        int
+	fragmentCount int
+	data          [][]byte
 }
 
 func Split(data []byte, fragSize int) (*SplitData, error) {
+	if fragSize > MAX_FRAG_SIZE {
+		err := fmt.Errorf("fragment size greater than maximum allowable fragment size")
+		return nil, err
+	}
 	blocklen := len(data)
 	nFrags := blocklen / fragSize
 	padlen := 0
@@ -31,10 +39,10 @@ func Split(data []byte, fragSize int) (*SplitData, error) {
 	}
 
 	splitData := &SplitData{
-		fragSize:  fragSize,
-		padlen:    padlen,
-		nFragment: nFrags,
-		data:      block,
+		fragSize:      fragSize,
+		padlen:        padlen,
+		fragmentCount: nFrags,
+		data:          block,
 	}
 	return splitData, nil
 }
@@ -48,14 +56,14 @@ func createPadding(padlen int) []byte {
 }
 
 func (s *SplitData) Print() {
-	fmt.Println(s.nFragment, s.fragSize, s.padlen, len(s.data))
+	fmt.Println(s.fragmentCount, s.fragSize, s.padlen, len(s.data))
 }
 
 func (s *SplitData) Join() ([]byte, error) {
-	size := (s.fragSize * s.nFragment) - s.padlen
+	size := (s.fragSize * s.fragmentCount) - s.padlen
 	out := make([]byte, 0)
-	for i, _ := range s.data {
-		if i < s.nFragment-1 {
+	for i := range s.data {
+		if i < s.fragmentCount-1 {
 			out = append(out, s.data[i]...)
 		} else {
 			out = append(out, s.data[i][:s.fragSize-s.padlen]...)
