@@ -50,3 +50,20 @@ func createPadding(padlen int) []byte {
 func (s *SplitData) Print() {
 	fmt.Println(s.nFragment, s.fragSize, s.padlen, len(s.data))
 }
+
+func (s *SplitData) Join() ([]byte, error) {
+	size := (s.fragSize * s.nFragment) - s.padlen
+	out := make([]byte, 0)
+	for i, _ := range s.data {
+		if i < s.nFragment-1 {
+			out = append(out, s.data[i]...)
+		} else {
+			out = append(out, s.data[i][:s.fragSize-s.padlen]...)
+		}
+	}
+	if size != len(out) {
+		err := fmt.Errorf("error joining the split data")
+		return nil, err
+	}
+	return out, nil
+}
