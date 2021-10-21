@@ -2,11 +2,14 @@ module github.com/tjohn327/deadline_aware_multipath
 
 go 1.17
 
+
 replace github.com/netsec-ethz/scion-apps v0.4.0 => github.com/netsys-lab/scion-apps v0.1.1-0.20210929142559-a9ca2024f287
 
 require github.com/netsec-ethz/scion-apps v0.4.0
 
 require (
+	github.com/klauspost/cpuid/v2 v2.0.9 // indirect
+	github.com/klauspost/reedsolomon v1.9.13 // indirect
 	github.com/antlr/antlr4 v0.0.0-20181218183524-be58ebffde8e // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/britram/borat v0.0.0-20181011130314-f891bcfcfb9b // indirect
