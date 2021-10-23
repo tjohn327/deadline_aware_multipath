@@ -5,7 +5,7 @@ import (
 )
 
 const (
-	MAX_UDP_BUFFER_SIZE = 1500
+	MAX_UDP_BUFFER_SIZE = 1472
 )
 
 type UDPProxy struct {
