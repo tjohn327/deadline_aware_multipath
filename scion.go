@@ -39,8 +39,14 @@ type ScionReceiver struct {
 }
 
 func NewScionSender(ctx context.Context, sendAddress *string, port *uint,
-	sendSelector pan.Selector, retransmitSelector pan.Selector, ingressChan chan []byte,
-	ackChan chan []byte, retransmitChan chan []byte) (*ScionSender, error) {
+	sendSelector pan.Selector, retransmitSelector pan.Selector,
+	ingressChan chan []byte, ackChan chan []byte,
+	retransmitChan chan []byte) (*ScionSender, error) {
+
+	if ingressChan == nil {
+		ingressChan = make(chan []byte, 10)
+	}
+
 	sendAddr, err := pan.ResolveUDPAddr(*sendAddress)
 	if err != nil {
 		return nil, err
@@ -143,6 +149,10 @@ func NewScionReceiver(ctx context.Context, sendAddress *string, port *uint,
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	if egressChan == nil {
+		egressChan = make(chan []byte, 10)
 	}
 	receiver := &ScionReceiver{
 		listenConn:  listenConn,

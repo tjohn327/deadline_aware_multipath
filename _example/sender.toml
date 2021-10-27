@@ -1,5 +1,6 @@
 gateway_type = "sender"
 scion_port = 1234
+deadline = 50ms
 proxy_type = "unixgram"
 proxy_addr = "/temp/ingress"
 endpoint_addr = ""

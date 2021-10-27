@@ -14,6 +14,11 @@ const (
 	Send DataQueueType = iota
 	UnAck
 	Receive
+	ReceiveMem
+)
+const (
+	MAX_QUEUE_LENGTH    = 50
+	defaultTrimInterval = 500 * time.Millisecond
 )
 
 type DataQueue struct {
@@ -52,6 +57,9 @@ func NewDataQueue(t DataQueueType, ingressChan chan *DataFragment, egressChan ch
 	if t == UnAck {
 		dq.runAck()
 	}
+	if t == ReceiveMem {
+		dq.runTrim()
+	}
 	return dq
 }
 
@@ -69,6 +77,23 @@ func (dq *DataQueue) runAck() {
 		for {
 			f := <-dq.ingressChan
 			dq.ProcessACK(f)
+		}
+	}()
+}
+
+func (dq *DataQueue) runTrim() {
+	go func() {
+		for {
+			if dq.len > MAX_QUEUE_LENGTH {
+				dq.mutex.Lock()
+				dq.blocks = dq.blocks[dq.len-MAX_QUEUE_LENGTH:]
+				dq.len = len(dq.blocks)
+				if dq.len > 0 {
+					dq.headBlockID = dq.blocks[0].blockID
+				}
+				dq.mutex.Unlock()
+			}
+			time.Sleep(defaultTrimInterval)
 		}
 	}()
 }
