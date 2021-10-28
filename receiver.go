@@ -38,11 +38,21 @@ func NewReceiver(ctx context.Context, cfg *Config) (*Receiver, error) {
 func (r *Receiver) Run() {
 	go func() {
 		for {
-			buf := r.receiver.egressChan
+			buf := <-r.receiver.egressChan
 			frag, err := NewFragmentFromBytes(buf)
 			if err == nil {
-
+				if !r.receiveMemQ.IsDataBlockIn(frag.blockID) {
+					r.receiveQ.InsertFragment(frag)
+				}
 			}
+		}
+	}()
+
+	go func() {
+		for {
+			block := <-r.receiveQ.egressChan
+			r.receiveMemQ.InsertBlock(block)
+			r.egressChan <- block
 		}
 	}()
 }

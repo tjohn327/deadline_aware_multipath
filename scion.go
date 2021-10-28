@@ -86,7 +86,6 @@ func NewScionSender(ctx context.Context, sendAddress *string, port *uint,
 			// selector.SetPath(frag.path)
 			_, err := sender.sendConn.Write(buf)
 			if err != nil {
-				ctx.Done()
 				return
 			}
 		}
@@ -99,7 +98,6 @@ func NewScionSender(ctx context.Context, sendAddress *string, port *uint,
 			for {
 				n, _, err := sender.ackListenConn.ReadFrom(buffer)
 				if err != nil {
-					ctx.Done()
 					return
 				}
 				buf := make([]byte, n)
@@ -116,7 +114,6 @@ func NewScionSender(ctx context.Context, sendAddress *string, port *uint,
 				// selector.SetPath(frag.path)
 				_, err := sender.retransmitConn.Write(buf)
 				if err != nil {
-					ctx.Done()
 					return
 				}
 			}
@@ -168,7 +165,6 @@ func NewScionReceiver(ctx context.Context, sendAddress *string, port *uint,
 		for {
 			n, _, err := receiver.listenConn.ReadFrom(buffer)
 			if err != nil {
-				ctx.Done()
 				return
 			}
 			buf := make([]byte, n)
@@ -184,7 +180,6 @@ func NewScionReceiver(ctx context.Context, sendAddress *string, port *uint,
 				buf := <-receiver.ackChan
 				_, err := receiver.ackSendConn.Write(buf)
 				if err != nil {
-					doneChan <- err
 					return
 				}
 			}
@@ -254,7 +249,7 @@ func (g *SCIONGateway) Run() {
 		for {
 			n, _, err := g.listenConn.ReadFrom(buffer)
 			if err != nil {
-				doneChan <- err
+				// doneChan <- err
 				return
 			}
 			buf := make([]byte, n)
@@ -270,7 +265,7 @@ func (g *SCIONGateway) Run() {
 			// selector.SetPath(frag.path)
 			_, err := g.sendConn.Write(buf)
 			if err != nil {
-				doneChan <- err
+				// doneChan <- err
 				return
 			}
 		}
@@ -288,7 +283,7 @@ func (g *SCIONGateway) RunACKSend() {
 			buf := <-g.ACKChan
 			_, err := g.ackSendConn.Write(buf)
 			if err != nil {
-				doneChan <- err
+				// doneChan <- err
 				return
 			}
 		}
@@ -306,7 +301,7 @@ func (g *SCIONGateway) RunACKReceive() {
 		for {
 			n, _, err := g.ackListenConn.ReadFrom(buffer)
 			if err != nil {
-				doneChan <- err
+				// doneChan <- err
 				return
 			}
 			buf := make([]byte, n)

@@ -15,7 +15,7 @@ type Scheduler struct {
 }
 
 func NewScheduler(ctx context.Context, cfg *Config) (*Scheduler, error) {
-	sendSelector := pan.DefaultSelector{}
+	sendSelector := pan.DefaultSelector{} //TODO: implement custom selector
 	retransmitSelector := pan.DefaultSelector{}
 	scionIngressChan := make(chan []byte, 10)
 	scionAckChan := make(chan []byte, 10)

@@ -44,7 +44,7 @@ func (u *UDPProxy) Run() {
 		for {
 			n, _, err := u.conn.ReadFromUDP(buffer)
 			if err != nil {
-				doneChan <- err
+				// doneChan <- err
 				return
 			}
 			buf := make([]byte, n)
@@ -59,7 +59,7 @@ func (u *UDPProxy) Run() {
 			buf := <-u.IngressChan
 			_, err := u.conn.WriteToUDP(buf, u.sendAddr)
 			if err != nil {
-				doneChan <- err
+				// doneChan <- err
 				return
 			}
 			// if n != len(buf) {
