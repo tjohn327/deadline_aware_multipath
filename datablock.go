@@ -201,3 +201,9 @@ func NewFragmentFromBytes(data []byte) (*DataFragment, error) {
 		data:          data,
 	}, nil
 }
+
+func (f *DataFragment) GetAckBytes() []byte {
+	buf := make([]byte, headerSize)
+	copy(buf, f.data[:headerSize])
+	return buf
+}

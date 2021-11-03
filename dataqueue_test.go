@@ -38,8 +38,8 @@ func TestDataQueue(t *testing.T) {
 	egressChan := make(chan *DataBlock, 2)
 
 	deadline := time.Duration(time.Second)
-	unackQueue := NewDataQueue(UnAck, ackChan, retransmitChan, &deadline)
-	NewDataQueue(Receive, receiveChan, egressChan, nil) //receive queue
+	unackQueue := NewDataQueue(UnAck, ackChan, retransmitChan, &deadline, nil)
+	NewDataQueue(Receive, receiveChan, egressChan, nil, nil) //receive queue
 	unackQueue.InsertBlock(db)
 
 	for i, v := range db.fragments {

@@ -12,6 +12,7 @@ type Scheduler struct {
 	retransmitSelector pan.Selector
 	ingressChan        chan *DataBlock
 	unAckQ             *DataQueue
+	packetLossChan     chan int
 }
 
 func NewScheduler(ctx context.Context, cfg *Config) (*Scheduler, error) {
@@ -22,20 +23,22 @@ func NewScheduler(ctx context.Context, cfg *Config) (*Scheduler, error) {
 	scionRestransmitChan := make(chan []byte, 10)
 	retransmitChan := make(chan *DataBlock, 10)
 	ingressChan := make(chan *DataBlock, 10)
-	sender, err := NewScionSender(ctx, &cfg.remote.scionAddr,
-		&cfg.listen_port, &sendSelector, &retransmitSelector, scionIngressChan,
+	packetLossChan := make(chan int, 10)
+	sender, err := NewScionSender(ctx, &cfg.Remote.ScionAddr,
+		&cfg.Listen_port, &sendSelector, &retransmitSelector, scionIngressChan,
 		scionAckChan, scionRestransmitChan)
 	if err != nil {
 		return nil, err
 	}
 
-	unAckQ := NewDataQueue(UnAck, nil, retransmitChan, &cfg.deadline)
+	unAckQ := NewDataQueue(UnAck, nil, retransmitChan, &cfg.Deadline.Duration, packetLossChan)
 	scheduler := &Scheduler{
 		sender:             *sender,
 		sendSelector:       &sendSelector,
 		retransmitSelector: &retransmitSelector,
 		ingressChan:        ingressChan,
 		unAckQ:             unAckQ,
+		packetLossChan:     packetLossChan,
 	}
 	return scheduler, nil
 }
@@ -67,9 +70,13 @@ func (s *Scheduler) Run() {
 		for {
 			ack := <-s.sender.ackChan
 			frag, err := NewFragmentFromBytes(ack)
-			if err != nil {
-				s.unAckQ.ProcessACK(frag)
+			if err == nil {
+				s.unAckQ.ingressChan <- frag
 			}
 		}
 	}()
+}
+
+func (s *Scheduler) Send(db *DataBlock) {
+	s.ingressChan <- db
 }

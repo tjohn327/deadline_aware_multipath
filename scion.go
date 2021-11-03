@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"net"
 
 	"github.com/netsec-ethz/scion-apps/pkg/pan"
@@ -94,7 +95,7 @@ func NewScionSender(ctx context.Context, sendAddress *string, port *uint,
 	if ackChan != nil {
 		go func() {
 			defer sender.ackListenConn.Close()
-			buffer := make([]byte, MAX_UDP_BUFFER_SIZE)
+			buffer := make([]byte, MAX_BUFFER_SIZE)
 			for {
 				n, _, err := sender.ackListenConn.ReadFrom(buffer)
 				if err != nil {
@@ -161,7 +162,7 @@ func NewScionReceiver(ctx context.Context, sendAddress *string, port *uint,
 
 	go func() {
 		defer receiver.listenConn.Close()
-		buffer := make([]byte, MAX_UDP_BUFFER_SIZE)
+		buffer := make([]byte, MAX_BUFFER_SIZE)
 		for {
 			n, _, err := receiver.listenConn.ReadFrom(buffer)
 			if err != nil {
@@ -180,6 +181,7 @@ func NewScionReceiver(ctx context.Context, sendAddress *string, port *uint,
 				buf := <-receiver.ackChan
 				_, err := receiver.ackSendConn.Write(buf)
 				if err != nil {
+					log.Println(err)
 					return
 				}
 			}
@@ -245,7 +247,7 @@ func NewSCIONGateway(ctx context.Context, sendAddress *string, port *uint,
 func (g *SCIONGateway) Run() {
 	go func() {
 		defer g.listenConn.Close()
-		buffer := make([]byte, MAX_UDP_BUFFER_SIZE)
+		buffer := make([]byte, MAX_BUFFER_SIZE)
 		for {
 			n, _, err := g.listenConn.ReadFrom(buffer)
 			if err != nil {
@@ -297,7 +299,7 @@ func (g *SCIONGateway) RunACKReceive() {
 	}
 	go func() {
 		defer g.ackListenConn.Close()
-		buffer := make([]byte, MAX_UDP_BUFFER_SIZE)
+		buffer := make([]byte, MAX_BUFFER_SIZE)
 		for {
 			n, _, err := g.ackListenConn.ReadFrom(buffer)
 			if err != nil {

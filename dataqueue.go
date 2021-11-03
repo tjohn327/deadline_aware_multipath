@@ -18,37 +18,39 @@ const (
 )
 const (
 	MAX_QUEUE_LENGTH    = 50
-	defaultTrimInterval = 500 * time.Millisecond
+	defaultTrimInterval = 5000 * time.Millisecond
 )
 
 type DataQueue struct {
-	queueType   DataQueueType
-	headBlockID int
-	tailBlockID int
-	len         int
-	deadline    *time.Duration
-	blocks      []*DataBlock
-	ingressChan chan *DataFragment
-	egressChan  chan *DataBlock
-	mutex       sync.Mutex
+	queueType      DataQueueType
+	headBlockID    int
+	tailBlockID    int
+	len            int
+	deadline       *time.Duration
+	blocks         []*DataBlock
+	ingressChan    chan *DataFragment
+	egressChan     chan *DataBlock
+	packetLossChan chan int
+	mutex          sync.Mutex
 }
 
 func NewDataQueue(t DataQueueType, ingressChan chan *DataFragment, egressChan chan *DataBlock,
-	deadline *time.Duration) *DataQueue {
+	deadline *time.Duration, packetLossChan chan int) *DataQueue {
 
 	if ingressChan == nil {
 		ingressChan = make(chan *DataFragment, 10)
 	}
 
 	dq := &DataQueue{
-		queueType:   t,
-		headBlockID: 0,
-		tailBlockID: 0,
-		len:         0,
-		deadline:    deadline,
-		blocks:      make([]*DataBlock, 0),
-		ingressChan: ingressChan,
-		egressChan:  egressChan,
+		queueType:      t,
+		headBlockID:    0,
+		tailBlockID:    0,
+		len:            0,
+		deadline:       deadline,
+		blocks:         make([]*DataBlock, 0),
+		ingressChan:    ingressChan,
+		egressChan:     egressChan,
+		packetLossChan: packetLossChan,
 	}
 
 	if t == Receive {
@@ -76,7 +78,7 @@ func (dq *DataQueue) runAck() {
 	go func() {
 		for {
 			f := <-dq.ingressChan
-			dq.ProcessACK(f)
+			dq.processACK(f)
 		}
 	}()
 }
@@ -102,12 +104,17 @@ func (dq *DataQueue) retransmit(blockID int) {
 	deadline := (*dq.deadline)
 	timer := time.NewTimer(deadline)
 	<-timer.C
-	out := dq.getDataBlockbyID(blockID)
+	out := dq.getDataBlockByID(blockID)
 	if out != nil {
+		loss := out.unackedCount
 		if out.unackedCount > out.parityCount {
 			dq.egressChan <- out
 		}
+		if dq.packetLossChan != nil {
+			dq.packetLossChan <- loss
+		}
 	}
+
 }
 
 func (dq *DataQueue) InsertBlock(db *DataBlock) error {
@@ -130,8 +137,6 @@ func (dq *DataQueue) InsertBlock(db *DataBlock) error {
 }
 
 func (dq *DataQueue) InsertFragment(f *DataFragment) {
-	dq.mutex.Lock()
-	defer dq.mutex.Unlock()
 	i, in := dq.isDataBlockIn(f.blockID)
 	if in {
 		dq.blocks[i].InsertFragment(f)
@@ -158,7 +163,7 @@ func (dq *DataQueue) GetDataBlock() (*DataBlock, error) {
 	return out, nil
 }
 
-func (dq *DataQueue) getDataBlockbyID(blockID int) *DataBlock {
+func (dq *DataQueue) getDataBlockByID(blockID int) *DataBlock {
 	i, in := dq.isDataBlockIn(blockID)
 	if !in {
 		return nil
@@ -173,7 +178,6 @@ func (dq *DataQueue) getDataBlock(i int) *DataBlock {
 	}
 	out := dq.blocks[i]
 	dq.blocks = append(dq.blocks[:i], dq.blocks[i+1:]...)
-	dq.blocks = dq.blocks[i:dq.len]
 	dq.len--
 	if dq.len > 0 {
 		dq.headBlockID = dq.blocks[0].blockID
@@ -194,7 +198,7 @@ func (dq *DataQueue) isDataBlockIn(blockID int) (int, bool) {
 	return 0, false
 }
 
-func (dq *DataQueue) ProcessACK(f *DataFragment) {
+func (dq *DataQueue) processACK(f *DataFragment) {
 	i, in := dq.isDataBlockIn(f.blockID)
 	if in {
 		dq.blocks[i].AcknowledgeFragment(f)

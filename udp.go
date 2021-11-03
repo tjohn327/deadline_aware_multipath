@@ -5,7 +5,7 @@ import (
 )
 
 const (
-	MAX_UDP_BUFFER_SIZE = 1472
+	MAX_BUFFER_SIZE = 1200
 )
 
 type UDPProxy struct {
@@ -38,9 +38,9 @@ func NewUDPProxy(listenAddress *string, sendAddress *string) (*UDPProxy, error) 
 }
 
 func (u *UDPProxy) Run() {
-	buffer := make([]byte, MAX_UDP_BUFFER_SIZE)
+	buffer := make([]byte, MAX_BUFFER_SIZE)
 	go func() {
-		// defer conn.Close()
+		defer u.conn.Close()
 		for {
 			n, _, err := u.conn.ReadFromUDP(buffer)
 			if err != nil {
@@ -54,7 +54,7 @@ func (u *UDPProxy) Run() {
 	}()
 
 	go func() {
-		// defer conn.Close()
+		defer u.conn.Close()
 		for {
 			buf := <-u.IngressChan
 			_, err := u.conn.WriteToUDP(buf, u.sendAddr)

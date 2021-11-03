@@ -17,14 +17,14 @@ func NewReceiver(ctx context.Context, cfg *Config) (*Receiver, error) {
 	ackSelector := &pan.DefaultSelector{}
 	egressChan := make(chan *DataBlock, 10)
 	ackChan := make(chan []byte, 10)
-	scionReceiver, err := NewScionReceiver(ctx, &cfg.remote.scionAddr, &cfg.listen_port,
+	scionReceiver, err := NewScionReceiver(ctx, &cfg.Remote.ScionAddr, &cfg.Listen_port,
 		ackSelector, nil, ackChan)
 	if err != nil {
 		return nil, err
 	}
 
-	receiveQ := NewDataQueue(Receive, nil, egressChan, nil)
-	receiveMemQ := NewDataQueue(ReceiveMem, nil, nil, nil)
+	receiveQ := NewDataQueue(Receive, nil, egressChan, nil, nil)
+	receiveMemQ := NewDataQueue(ReceiveMem, nil, nil, nil, nil)
 
 	receiver := &Receiver{
 		receiver:    scionReceiver,
@@ -40,11 +40,13 @@ func (r *Receiver) Run() {
 		for {
 			buf := <-r.receiver.egressChan
 			frag, err := NewFragmentFromBytes(buf)
+			ack := frag.GetAckBytes()
 			if err == nil {
 				if !r.receiveMemQ.IsDataBlockIn(frag.blockID) {
 					r.receiveQ.InsertFragment(frag)
 				}
 			}
+			r.receiver.ackChan <- ack
 		}
 	}()
 

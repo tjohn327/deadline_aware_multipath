@@ -3,12 +3,22 @@ package main
 import "time"
 
 type Config struct {
-	gwType      string        `toml:"gateway_type"`
-	listen_port uint          `toml:"listen_port"`
-	deadline    time.Duration `toml:"deadline"`
-	remote      Remote
+	GwType      string   `toml:"gateway_type"`
+	Listen_port uint     `toml:"listen_port"`
+	Deadline    duration `toml:"deadline"`
+	Remote      remote   `toml:"remote"`
 }
 
-type Remote struct {
-	scionAddr string `toml:"scion_add"`
+type remote struct {
+	ScionAddr string `toml:"scion_addr"`
+}
+
+type duration struct {
+	time.Duration
+}
+
+func (d *duration) UnmarshalText(text []byte) error {
+	var err error
+	d.Duration, err = time.ParseDuration(string(text))
+	return err
 }
