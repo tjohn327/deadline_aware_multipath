@@ -85,9 +85,15 @@ func NewScionSender(ctx context.Context, sendAddress *string, port *uint,
 		for {
 			buf := <-sender.ingressChan
 			// selector.SetPath(frag.path)
+			// if sender.sendSelector.Path() == nil {
+			// 	log.Println("no path available\n")
+			// 	continue
+			// }
 			_, err := sender.sendConn.Write(buf)
 			if err != nil {
-				return
+				// errChan <- err
+				log.Println("scion send:", err)
+				continue
 			}
 		}
 	}()
@@ -99,7 +105,9 @@ func NewScionSender(ctx context.Context, sendAddress *string, port *uint,
 			for {
 				n, _, err := sender.ackListenConn.ReadFrom(buffer)
 				if err != nil {
-					return
+					// errChan <- err
+					log.Println("ack listen:", err)
+					continue
 				}
 				buf := make([]byte, n)
 				copy(buf, buffer[:n])
@@ -115,7 +123,9 @@ func NewScionSender(ctx context.Context, sendAddress *string, port *uint,
 				// selector.SetPath(frag.path)
 				_, err := sender.retransmitConn.Write(buf)
 				if err != nil {
-					return
+					// errChan <- err
+					log.Println("retransmit:", err)
+					continue
 				}
 			}
 		}()
@@ -161,12 +171,13 @@ func NewScionReceiver(ctx context.Context, sendAddress *string, port *uint,
 	}
 
 	go func() {
-		defer receiver.listenConn.Close()
+		// defer receiver.listenConn.Close()
 		buffer := make([]byte, MAX_BUFFER_SIZE)
 		for {
 			n, _, err := receiver.listenConn.ReadFrom(buffer)
 			if err != nil {
-				return
+				log.Println("scion listen:", err)
+				continue
 			}
 			buf := make([]byte, n)
 			copy(buf, buffer[:n])
@@ -181,8 +192,8 @@ func NewScionReceiver(ctx context.Context, sendAddress *string, port *uint,
 				buf := <-receiver.ackChan
 				_, err := receiver.ackSendConn.Write(buf)
 				if err != nil {
-					log.Println(err)
-					return
+					log.Println("ack send", err)
+					continue
 				}
 			}
 		}()

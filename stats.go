@@ -45,7 +45,7 @@ func (s *Stats) GetAveragePacketLoss() float64 {
 		for _, v := range s.packetLoss {
 			sum = sum + v
 		}
-		avg = float64(sum) / float64(len(s.packetLoss))
+		avg = float64(sum) / float64(s.length)
 	}
 	return avg
 }

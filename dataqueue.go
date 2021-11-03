@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"sync"
 	"time"
 )
@@ -108,6 +109,7 @@ func (dq *DataQueue) retransmit(blockID int) {
 	if out != nil {
 		loss := out.unackedCount
 		if out.unackedCount > out.parityCount {
+			log.Printf("retransmit- block: %d fragaments: %d", out.blockID, out.unackedCount)
 			dq.egressChan <- out
 		}
 		if dq.packetLossChan != nil {

@@ -7,16 +7,21 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"os"
+	"os/signal"
 	"time"
 
 	"github.com/BurntSushi/toml"
 )
 
 var (
-	doneChan = make(chan error, 1)
+	errChan = make(chan error, 1)
 )
 
 func main() {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+
 	configFile := flag.String("c", "", "location of the config file")
 	flag.Parse()
 	if *configFile == "" {
@@ -29,14 +34,25 @@ func main() {
 	switch cfg.GwType {
 	case "sender":
 		RunSender(&cfg)
+		break
 	case "receiver":
 		RunReceiver(&cfg)
+		break
 	default:
 		check(fmt.Errorf("invalid type"))
+	}
+
+	select {
+	case <-sigCh:
+		log.Println("\nterminating")
+		return
+	case err := <-errChan:
+		check(err)
 	}
 }
 
 func RunSender(cfg *Config) {
+	log.Println("starting sender")
 	ingressChan := make(chan []byte, 10)
 	scheduler, err := NewScheduler(context.Background(), cfg)
 	check(err)
@@ -67,17 +83,22 @@ func RunSender(cfg *Config) {
 			}
 		}
 	}()
+
 	time.Sleep(10 * time.Second)
-	for {
-		buf := make([]byte, len(test_image))
-		copy(buf, test_image)
-		ingressChan <- buf
-		time.Sleep(cfg.Deadline.Duration)
-	}
+	go func() {
+		for {
+			buf := make([]byte, len(test_image))
+			copy(buf, test_image)
+			ingressChan <- buf
+			time.Sleep(cfg.Deadline.Duration)
+		}
+	}()
 
 }
 
 func RunReceiver(cfg *Config) {
+	log.Println("starting receiver")
+
 	test_image_hash := [16]byte{105, 162, 92, 131, 191, 110, 214, 187, 153, 225, 26, 200, 95, 97, 227, 55}
 
 	egressChan := make(chan []byte, 10)
@@ -87,9 +108,13 @@ func RunReceiver(cfg *Config) {
 	check(err)
 	receiver.Run()
 	go func() {
+		prevBlock := -1
 		for {
 			db := <-receiver.egressChan
-			log.Printf("Block received: %d\n", db.blockID)
+			if db.blockID != prevBlock+1 {
+				log.Printf("block missed: %d\n", prevBlock+1)
+			}
+			prevBlock = db.blockID
 			encodedData, err := db.GetEncodedData()
 			checkNonFatal(err)
 			data, err := rd.Decode(encodedData)
@@ -97,14 +122,15 @@ func RunReceiver(cfg *Config) {
 			egressChan <- data
 		}
 	}()
-
-	for {
-		data := <-egressChan
-		hash := md5.Sum(data)
-		if hash != test_image_hash {
-			log.Println("hash mismatch")
+	go func() {
+		for {
+			data := <-egressChan
+			hash := md5.Sum(data)
+			if hash != test_image_hash {
+				log.Println("hash mismatch")
+			}
 		}
-	}
+	}()
 }
 
 func checkNonFatal(e error) {

@@ -41,3 +41,4 @@
 # End of https://www.toptal.com/developers/gitignore/api/go,visualstudiocode
 
 /_example/*
+deadline_aware_multipath
