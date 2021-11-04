@@ -1,4 +1,4 @@
-gateway_type = "sender"
+gateway_type = "receiver"
 listen_port = 16000
 deadline = "80ms"
 fragment_size = 1200

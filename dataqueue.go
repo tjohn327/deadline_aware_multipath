@@ -23,16 +23,17 @@ const (
 )
 
 type DataQueue struct {
-	queueType      DataQueueType
-	headBlockID    int
-	tailBlockID    int
-	len            int
-	deadline       *time.Duration
-	blocks         []*DataBlock
-	ingressChan    chan *DataFragment
-	egressChan     chan *DataBlock
-	packetLossChan chan int
-	mutex          sync.Mutex
+	queueType           DataQueueType
+	headBlockID         int
+	tailBlockID         int
+	len                 int
+	prevCompleteBlockId int
+	deadline            *time.Duration
+	blocks              []*DataBlock
+	ingressChan         chan *DataFragment
+	egressChan          chan *DataBlock
+	packetLossChan      chan int
+	mutex               sync.Mutex
 }
 
 func NewDataQueue(t DataQueueType, ingressChan chan *DataFragment, egressChan chan *DataBlock,
@@ -43,15 +44,16 @@ func NewDataQueue(t DataQueueType, ingressChan chan *DataFragment, egressChan ch
 	}
 
 	dq := &DataQueue{
-		queueType:      t,
-		headBlockID:    0,
-		tailBlockID:    0,
-		len:            0,
-		deadline:       deadline,
-		blocks:         make([]*DataBlock, 0),
-		ingressChan:    ingressChan,
-		egressChan:     egressChan,
-		packetLossChan: packetLossChan,
+		queueType:           t,
+		headBlockID:         0,
+		tailBlockID:         0,
+		len:                 0,
+		prevCompleteBlockId: -1,
+		deadline:            deadline,
+		blocks:              make([]*DataBlock, 0),
+		ingressChan:         ingressChan,
+		egressChan:          egressChan,
+		packetLossChan:      packetLossChan,
 	}
 
 	if t == Receive {
@@ -120,6 +122,8 @@ func (dq *DataQueue) retransmit(blockID int) {
 }
 
 func (dq *DataQueue) InsertBlock(db *DataBlock) error {
+	dq.mutex.Lock()
+	defer dq.mutex.Unlock()
 	_, in := dq.isDataBlockIn(db.blockID)
 	if !in {
 		dq.blocks = append(dq.blocks, db)
@@ -139,12 +143,20 @@ func (dq *DataQueue) InsertBlock(db *DataBlock) error {
 }
 
 func (dq *DataQueue) InsertFragment(f *DataFragment) {
+	if f.blockID < dq.prevCompleteBlockId && dq.prevCompleteBlockId <= 65534 {
+		return
+	}
 	i, in := dq.isDataBlockIn(f.blockID)
 	if in {
-		dq.blocks[i].InsertFragment(f)
+		_, err := dq.blocks[i].InsertFragment(f)
+		if err != nil {
+			log.Println("insert fragment:", err)
+			return
+		}
 		if dq.blocks[i].canDecode && dq.queueType == Receive && dq.egressChan != nil {
 			out := dq.getDataBlock(i)
 			if out != nil {
+				dq.prevCompleteBlockId = out.blockID
 				dq.egressChan <- out
 			}
 		}
@@ -175,15 +187,26 @@ func (dq *DataQueue) getDataBlockByID(blockID int) *DataBlock {
 }
 
 func (dq *DataQueue) getDataBlock(i int) *DataBlock {
+	dq.mutex.Lock()
+	defer dq.mutex.Unlock()
 	if i >= dq.len || dq.len == 0 {
 		return nil
 	}
 	out := dq.blocks[i]
-	dq.blocks = append(dq.blocks[:i], dq.blocks[i+1:]...)
+	if i == 0 && dq.len == 1 {
+		dq.blocks = dq.blocks[:0]
+	} else if i == 0 && dq.len > 1 {
+		dq.blocks = dq.blocks[1:]
+	} else {
+		dq.blocks = append(dq.blocks[:i], dq.blocks[i+1:]...)
+	}
 	dq.len--
 	if dq.len > 0 {
 		dq.headBlockID = dq.blocks[0].blockID
 		dq.tailBlockID = dq.blocks[len(dq.blocks)-1].blockID
+	} else {
+		dq.headBlockID = 0
+		dq.tailBlockID = 0
 	}
 	return out
 }

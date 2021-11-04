@@ -7,7 +7,7 @@ replace github.com/netsec-ethz/scion-apps v0.4.0 => github.com/netsys-lab/scion-
 require github.com/netsec-ethz/scion-apps v0.4.0
 
 require (
-	github.com/BurntSushi/toml v0.4.1 // indirect
+	github.com/BurntSushi/toml v0.4.1
 	github.com/klauspost/cpuid/v2 v2.0.9 // indirect
 	github.com/klauspost/reedsolomon v1.9.13
 )

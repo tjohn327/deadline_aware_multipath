@@ -43,10 +43,11 @@ func (r *Receiver) Run() {
 			ack := frag.GetAckBytes()
 			if err == nil {
 				if !r.receiveMemQ.IsDataBlockIn(frag.blockID) {
-					r.receiveQ.InsertFragment(frag)
+					r.receiveQ.ingressChan <- frag
 				}
+				r.receiver.ackChan <- ack
 			}
-			r.receiver.ackChan <- ack
+
 		}
 	}()
 
@@ -54,7 +55,9 @@ func (r *Receiver) Run() {
 		for {
 			block := <-r.receiveQ.egressChan
 			r.receiveMemQ.InsertBlock(block)
-			r.egressChan <- block
+			if block.canDecode {
+				r.egressChan <- block
+			}
 		}
 	}()
 }

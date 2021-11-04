@@ -16,7 +16,7 @@ type Scheduler struct {
 }
 
 func NewScheduler(ctx context.Context, cfg *Config) (*Scheduler, error) {
-	sendSelector := pan.DefaultSelector{} //TODO: implement custom selector
+	sendSelector := SendSelector{} //TODO: implement custom selector
 	retransmitSelector := pan.DefaultSelector{}
 	scionIngressChan := make(chan []byte, 10)
 	scionAckChan := make(chan []byte, 10)
@@ -30,7 +30,7 @@ func NewScheduler(ctx context.Context, cfg *Config) (*Scheduler, error) {
 	if err != nil {
 		return nil, err
 	}
-
+	sender.sendSelector.(*SendSelector).SetPath(1)
 	unAckQ := NewDataQueue(UnAck, nil, retransmitChan, &cfg.Deadline.Duration, packetLossChan)
 	scheduler := &Scheduler{
 		sender:             *sender,

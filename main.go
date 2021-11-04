@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"time"
@@ -15,7 +16,8 @@ import (
 )
 
 var (
-	errChan = make(chan error, 1)
+	errChan        = make(chan error, 1)
+	send_telemetry = true
 )
 
 func main() {
@@ -34,10 +36,8 @@ func main() {
 	switch cfg.GwType {
 	case "sender":
 		RunSender(&cfg)
-		break
 	case "receiver":
 		RunReceiver(&cfg)
-		break
 	default:
 		check(fmt.Errorf("invalid type"))
 	}
@@ -56,7 +56,7 @@ func RunSender(cfg *Config) {
 	ingressChan := make(chan []byte, 10)
 	scheduler, err := NewScheduler(context.Background(), cfg)
 	check(err)
-	manager, err := NewManager(cfg, scheduler, 1000)
+	manager, err := NewManager(cfg, scheduler, int(cfg.FragSize))
 	check(err)
 	rd, err := NewReedSolomon(10, manager.parityCount)
 	check(err)
@@ -65,6 +65,11 @@ func RunSender(cfg *Config) {
 
 	test_image, err := ioutil.ReadFile("testdata/test_image.jpg")
 	check(err)
+
+	var timestamp_conn net.Conn
+	if send_telemetry {
+		timestamp_conn, _ = net.Dial("udp", "192.168.1.151:19000")
+	}
 
 	go func() {
 		blockID := 0
@@ -75,6 +80,10 @@ func RunSender(cfg *Config) {
 			encodedData, err := rd.Encode(split, manager.parityCount)
 			checkNonFatal(err)
 			db := NewDataBlockFromEncodedData(encodedData, blockID)
+			if send_telemetry {
+				blockid := fmt.Sprintf(`{"blockid":"%d"}`, db.blockID)
+				timestamp_conn.Write([]byte(blockid))
+			}
 			scheduler.Send(db)
 			if blockID > 65534 {
 				blockID = 0
@@ -84,13 +93,14 @@ func RunSender(cfg *Config) {
 		}
 	}()
 
-	time.Sleep(10 * time.Second)
+	time.Sleep(5 * time.Second)
 	go func() {
+		delay := time.Duration(int64(float64(cfg.Deadline.Duration) * 1.2))
 		for {
 			buf := make([]byte, len(test_image))
 			copy(buf, test_image)
 			ingressChan <- buf
-			time.Sleep(cfg.Deadline.Duration)
+			time.Sleep(delay)
 		}
 	}()
 
@@ -107,12 +117,27 @@ func RunReceiver(cfg *Config) {
 	rd, err := NewReedSolomon(10, 2)
 	check(err)
 	receiver.Run()
+
+	var timestamp_conn net.Conn
+	if send_telemetry {
+		timestamp_conn, _ = net.Dial("udp", "192.168.1.151:19100")
+	}
 	go func() {
 		prevBlock := -1
 		for {
 			db := <-receiver.egressChan
+			if send_telemetry {
+				blockid := fmt.Sprintf(`{"blockid":"%d"}`, db.blockID)
+				timestamp_conn.Write([]byte(blockid))
+			}
 			if db.blockID != prevBlock+1 {
-				log.Printf("block missed: %d\n", prevBlock+1)
+				if db.blockID == prevBlock+2 {
+					log.Printf("block missed: %d (1)\n", prevBlock+1)
+				} else {
+					lastBlock := db.blockID - 1
+					num := lastBlock - prevBlock
+					log.Printf("blocks missed: %d-%d (%d)\n", prevBlock+1, lastBlock, num)
+				}
 			}
 			prevBlock = db.blockID
 			encodedData, err := db.GetEncodedData()
