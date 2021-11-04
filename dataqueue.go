@@ -224,6 +224,8 @@ func (dq *DataQueue) isDataBlockIn(blockID int) (int, bool) {
 }
 
 func (dq *DataQueue) processACK(f *DataFragment) {
+	dq.mutex.Lock()
+	defer dq.mutex.Unlock()
 	i, in := dq.isDataBlockIn(f.blockID)
 	if in {
 		dq.blocks[i].AcknowledgeFragment(f)
