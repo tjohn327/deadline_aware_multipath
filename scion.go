@@ -4,8 +4,11 @@ import (
 	"context"
 	"log"
 	"net"
+	"runtime"
+	"time"
 
 	"github.com/netsec-ethz/scion-apps/pkg/pan"
+	"github.com/vishvananda/netns"
 )
 
 type SCIONGateway struct {
@@ -21,55 +24,127 @@ type SCIONGateway struct {
 }
 
 type ScionSender struct {
-	sendConn           pan.Conn
+	sendConn           net.Conn
 	sendSelector       pan.Selector
-	retransmitConn     pan.Conn
+	retransmitConn     net.Conn
 	retransmitSelector pan.Selector
-	ackListenConn      pan.ListenConn
+	ackListenConn      net.Conn
 	ingressChan        chan []byte
 	ackChan            chan []byte
 	retransmitChan     chan []byte
+	paritySendConn     net.Conn
+	paritySelector     pan.Selector
+	ingressChanParity  chan []byte
 }
 
 type ScionReceiver struct {
-	listenConn  pan.ListenConn
-	ackSendConn pan.Conn
-	ackSelector pan.Selector
-	egressChan  chan []byte
-	ackChan     chan []byte
+	listenConn       net.Conn
+	listenConnRe     net.Conn
+	listenConnParity net.Conn
+	ackSendConn      net.Conn
+	ackSelector      pan.Selector
+	egressChan       chan []byte
+	reInChan         chan []byte
+	ackChan          chan []byte
 }
 
 func NewScionSender(ctx context.Context, sendAddress *string, port *uint,
 	sendSelector pan.Selector, retransmitSelector pan.Selector,
 	ingressChan chan []byte, ackChan chan []byte,
-	retransmitChan chan []byte) (*ScionSender, error) {
+	retransmitChan chan []byte, paritySelector pan.Selector,
+	ingressChanParity chan []byte) (*ScionSender, error) {
 
 	if ingressChan == nil {
-		ingressChan = make(chan []byte, 10)
+		ingressChan = make(chan []byte, 500)
 	}
 
-	sendAddr, err := pan.ResolveUDPAddr(*sendAddress)
+	var retransmitConn net.Conn
+	var ackListenConn net.Conn
+	var sendConn net.Conn
+
+	sendAddr, err := net.ResolveUDPAddr("udp", "10.2.0.2:30001")
 	if err != nil {
 		return nil, err
 	}
-	sendConn, err := pan.DialUDP(ctx, nil, sendAddr, nil, sendSelector)
+	sendAddrRe, err := net.ResolveUDPAddr("udp", "10.1.0.2:30002")
 	if err != nil {
 		return nil, err
 	}
-	var retransmitConn pan.Conn
+	// sendAddrACK, err := net.ResolveUDPAddr("udp", "10.1.0.2:30003")
+	// if err != nil {
+	// 	return nil, err
+	// }
+	sendAddrParity, err := net.ResolveUDPAddr("udp", "10.1.0.2:30004")
+	if err != nil {
+		return nil, err
+	}
+	laddr, err := net.ResolveUDPAddr("udp", "10.2.0.1:30001")
+	if err != nil {
+		return nil, err
+	}
+	laddrRe, err := net.ResolveUDPAddr("udp", "10.1.0.1:30002")
+	if err != nil {
+		return nil, err
+	}
+	laddrACK, err := net.ResolveUDPAddr("udp", "10.1.0.1:30003")
+	if err != nil {
+		return nil, err
+	}
+	lAddrParity, err := net.ResolveUDPAddr("udp", "10.1.0.1:30004")
+	if err != nil {
+		return nil, err
+	}
+	sendConn, err = net.DialUDP("udp", laddr, sendAddr)
+	if err != nil {
+		return nil, err
+	}
+
 	if retransmitChan != nil {
-		retransmitConn, err = pan.DialUDP(ctx, nil, sendAddr, nil, retransmitSelector)
+		retransmitConn, err = net.DialUDP("udp", laddrRe, sendAddrRe)
 		if err != nil {
 			return nil, err
 		}
 	}
-	var ackListenConn pan.ListenConn
+
 	if ackChan != nil {
-		ackListenConn, err = pan.ListenUDP(ctx, &net.UDPAddr{Port: int(*port) + 100}, nil)
+		ackListenConn, err = net.ListenUDP("udp", laddrACK)
 		if err != nil {
 			return nil, err
 		}
 	}
+
+	paritySendConn, err := net.DialUDP("udp", lAddrParity, sendAddrParity)
+	if err != nil {
+		return nil, err
+	}
+	// if !TEST_UDP {
+	// 	sendAddr, err := pan.ResolveUDPAddr(*sendAddress)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	sendConn, err = pan.DialUDP(ctx, nil, sendAddr, nil, sendSelector)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	if retransmitChan != nil {
+	// 		retransmitConn, err = pan.DialUDP(ctx, nil, sendAddr, nil, retransmitSelector)
+	// 		if err != nil {
+	// 			return nil, err
+	// 		}
+	// 	}
+	// 	if ackChan != nil {
+	// 		ackListenConn, err = pan.ListenUDP(ctx, &net.UDPAddr{Port: int(*port) + 100}, nil)
+	// 		if err != nil {
+	// 			return nil, err
+	// 		}
+	// 	}
+
+	// 	paritySendConn, err = pan.DialUDP(ctx, nil, sendAddr, nil, paritySelector)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// }
+
 	sender := &ScionSender{
 		sendConn:           sendConn,
 		sendSelector:       sendSelector,
@@ -79,22 +154,58 @@ func NewScionSender(ctx context.Context, sendAddress *string, port *uint,
 		ingressChan:        ingressChan,
 		ackChan:            ackChan,
 		retransmitChan:     retransmitChan,
+		paritySendConn:     paritySendConn,
+		ingressChanParity:  ingressChanParity,
+		paritySelector:     paritySelector,
 	}
 	go func() {
 		defer sender.sendConn.Close()
 		for {
-			buf := <-sender.ingressChan
-			// selector.SetPath(frag.path)
-			// if sender.sendSelector.Path() == nil {
-			// 	log.Println("no path available\n")
-			// 	continue
-			// }
-			_, err := sender.sendConn.Write(buf)
-			if err != nil {
-				// errChan <- err
-				log.Println("scion send:", err)
-				continue
+			select {
+
+			case buf := <-sender.ingressChan:
+				// selector.SetPath(frag.path)
+				// if sender.sendSelector.Path() == nil {
+				// 	log.Println("no path available\n")
+				// 	continue
+				// }
+				_, err := sender.sendConn.Write(buf)
+				// time.Sleep(time.Microsecond * 10)
+				if err != nil {
+					// errChan <- err
+					log.Println("scion send:", err)
+					continue
+				}
+			case <-time.After(runDuration):
+				return
 			}
+
+			// log.Println("scion send:", n, len(buf))
+		}
+	}()
+
+	go func() {
+		defer sender.paritySendConn.Close()
+		for {
+			select {
+			case buf := <-sender.ingressChanParity:
+				// selector.SetPath(frag.path)
+				// if sender.sendSelector.Path() == nil {
+				// 	log.Println("no path available\n")
+				// 	continue
+				// }
+				_, err := sender.paritySendConn.Write(buf)
+				// time.Sleep(time.Microsecond * 100)
+				if err != nil {
+					// errChan <- err
+					log.Println("scion send:", err)
+					continue
+				}
+			case <-time.After(runDuration):
+				return
+			}
+
+			// log.Println("scion send:", n, len(buf))
 		}
 	}()
 
@@ -103,7 +214,7 @@ func NewScionSender(ctx context.Context, sendAddress *string, port *uint,
 			defer sender.ackListenConn.Close()
 			buffer := make([]byte, MAX_BUFFER_SIZE)
 			for {
-				n, _, err := sender.ackListenConn.ReadFrom(buffer)
+				n, err := sender.ackListenConn.Read(buffer)
 				if err != nil {
 					// errChan <- err
 					log.Println("ack listen:", err)
@@ -122,6 +233,7 @@ func NewScionSender(ctx context.Context, sendAddress *string, port *uint,
 				buf := <-sender.retransmitChan
 				// selector.SetPath(frag.path)
 				_, err := sender.retransmitConn.Write(buf)
+				// time.Sleep(time.Microsecond * 1)
 				if err != nil {
 					// errChan <- err
 					log.Println("retransmit:", err)
@@ -135,46 +247,112 @@ func NewScionSender(ctx context.Context, sendAddress *string, port *uint,
 }
 
 func NewScionReceiver(ctx context.Context, sendAddress *string, port *uint,
-	sendSelector pan.Selector, egressChan chan []byte,
+	sendSelector pan.Selector, egressChan chan []byte, reInChan chan []byte,
 	ackChan chan []byte) (*ScionReceiver, error) {
-	sendAddr, err := pan.ResolveUDPAddr(*sendAddress)
+
+	// reInChan := make(chan []byte, 500)
+	ns, err := netns.GetFromName("ns2")
+	if err != nil {
+		checkNonFatal(err)
+	}
+	defer ns.Close()
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if err := netns.Set(ns); err != nil {
+		checkNonFatal(err)
+	}
+
+	var listenConnRe net.Conn
+	var listenConn net.Conn
+	var listenConnParity net.Conn
+	var ackSendConn net.Conn
+
+	lAddr, err := net.ResolveUDPAddr("udp", "10.2.0.2:30001")
 	if err != nil {
 		return nil, err
 	}
-	listenConn, err := pan.ListenUDP(ctx, &net.UDPAddr{Port: int(*port)}, nil)
+	lAddrRe, err := net.ResolveUDPAddr("udp", "10.1.0.2:30002")
 	if err != nil {
 		return nil, err
 	}
-	ackAddr := pan.UDPAddr{
-		IA:   sendAddr.IA,
-		IP:   sendAddr.IP,
-		Port: sendAddr.Port + 100,
+	lAddrACK, err := net.ResolveUDPAddr("udp", "10.1.0.2:30003")
+	if err != nil {
+		return nil, err
 	}
-	// ackSelector := &pan.DefaultSelector{}
-	var ackSendConn pan.Conn
-	if ackChan != nil {
-		ackSendConn, err = pan.DialUDP(ctx, nil, ackAddr, nil, sendSelector)
-		if err != nil {
-			return nil, err
-		}
+	sendAddrACK, err := net.ResolveUDPAddr("udp", "10.1.0.1:30003")
+	if err != nil {
+		return nil, err
 	}
+	lAddrParity, err := net.ResolveUDPAddr("udp", "10.1.0.2:30004")
+	if err != nil {
+		return nil, err
+	}
+
+	listenConnRe, err = net.ListenUDP("udp", lAddrRe)
+	if err != nil {
+		return nil, err
+	}
+	listenConn, err = net.ListenUDP("udp", lAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	listenConnParity, err = net.ListenUDP("udp", lAddrParity)
+	if err != nil {
+		return nil, err
+	}
+	ackSendConn, err = net.DialUDP("udp", lAddrACK, sendAddrACK)
+	if err != nil {
+		return nil, err
+	}
+
+	// if !TEST_UDP {
+
+	// sendAddr, err := pan.ResolveUDPAddr(*sendAddress)
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// listenConn, err := pan.ListenUDP(ctx, &net.UDPAddr{Port: int(*port)}, nil)
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// ackAddr := pan.UDPAddr{
+	// 	IA:   sendAddr.IA,
+	// 	IP:   sendAddr.IP,
+	// 	Port: sendAddr.Port + 100,
+	// }
+	// // ackSelector := &pan.DefaultSelector{}
+	// var ackSendConn pan.Conn
+	// if ackChan != nil {
+	// 	ackSendConn, err = pan.DialUDP(ctx, nil, ackAddr, nil, sendSelector)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// }
+	//}
 
 	if egressChan == nil {
-		egressChan = make(chan []byte, 10)
+		egressChan = make(chan []byte, 500)
 	}
 	receiver := &ScionReceiver{
-		listenConn:  listenConn,
-		ackSelector: sendSelector,
-		ackSendConn: ackSendConn,
-		egressChan:  egressChan,
-		ackChan:     ackChan,
+		listenConn:       listenConn,
+		listenConnRe:     listenConnRe,
+		listenConnParity: listenConnParity,
+		ackSelector:      sendSelector,
+		ackSendConn:      ackSendConn,
+		egressChan:       egressChan,
+		ackChan:          ackChan,
+		reInChan:         reInChan,
 	}
 
+	// ns.Close()
+	// runtime.UnlockOSThread()
+
 	go func() {
-		// defer receiver.listenConn.Close()
+		defer receiver.listenConn.Close()
 		buffer := make([]byte, MAX_BUFFER_SIZE)
 		for {
-			n, _, err := receiver.listenConn.ReadFrom(buffer)
+			n, err := receiver.listenConn.Read(buffer)
 			if err != nil {
 				log.Println("scion listen:", err)
 				continue
@@ -182,6 +360,36 @@ func NewScionReceiver(ctx context.Context, sendAddress *string, port *uint,
 			buf := make([]byte, n)
 			copy(buf, buffer[:n])
 			receiver.egressChan <- buf
+		}
+	}()
+
+	go func() {
+		defer receiver.listenConnParity.Close()
+		buffer := make([]byte, MAX_BUFFER_SIZE)
+		for {
+			n, err := receiver.listenConnParity.Read(buffer)
+			if err != nil {
+				log.Println("scion listen:", err)
+				continue
+			}
+			buf := make([]byte, n)
+			copy(buf, buffer[:n])
+			receiver.egressChan <- buf
+		}
+	}()
+
+	go func() {
+		defer receiver.listenConnRe.Close()
+		buffer := make([]byte, MAX_BUFFER_SIZE)
+		for {
+			n, err := receiver.listenConnRe.Read(buffer)
+			if err != nil {
+				log.Println("scion listen:", err)
+				continue
+			}
+			buf := make([]byte, n)
+			copy(buf, buffer[:n])
+			receiver.reInChan <- buf
 		}
 	}()
 
@@ -222,7 +430,7 @@ func NewSCIONGateway(ctx context.Context, sendAddress *string, port *uint,
 	}
 
 	if ackChan == nil {
-		ackChan = make(chan []byte, 10)
+		ackChan = make(chan []byte, 500)
 	}
 
 	ackAddr := pan.UDPAddr{
@@ -277,10 +485,13 @@ func (g *SCIONGateway) Run() {
 			buf := <-g.IngressChan
 			// selector.SetPath(frag.path)
 			_, err := g.sendConn.Write(buf)
+			// time.Sleep(time.Microsecond)
+
 			if err != nil {
-				// doneChan <- err
-				return
+				log.Println("send", err)
+				continue
 			}
+
 		}
 	}()
 }
@@ -295,10 +506,12 @@ func (g *SCIONGateway) RunACKSend() {
 		for {
 			buf := <-g.ACKChan
 			_, err := g.ackSendConn.Write(buf)
+
 			if err != nil {
-				// doneChan <- err
-				return
+				log.Println("ack send", err)
+				continue
 			}
+
 		}
 	}()
 }
@@ -314,7 +527,7 @@ func (g *SCIONGateway) RunACKReceive() {
 		for {
 			n, _, err := g.ackListenConn.ReadFrom(buffer)
 			if err != nil {
-				// doneChan <- err
+
 				return
 			}
 			buf := make([]byte, n)

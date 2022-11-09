@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"sync"
 
 	"github.com/netsec-ethz/scion-apps/pkg/pan"
@@ -49,9 +50,44 @@ func (s *SendSelector) SetPath(pathIndex int) {
 	}
 }
 
+func (s *SendSelector) SetPath_s() {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	newcurrent := 0
+	if len(s.paths) > 0 {
+		for i, p := range s.paths {
+			if p.Fingerprint == "2 2" {
+				newcurrent = i
+				break
+			}
+		}
+	}
+	s.current = newcurrent
+}
+
+func (s *SendSelector) SetPath_r() {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	newcurrent := 0
+	if len(s.paths) > 0 {
+		for i, p := range s.paths {
+			if p.Fingerprint == "3 3" {
+				newcurrent = i
+				break
+			}
+		}
+	}
+	s.current = newcurrent
+}
+
 func (s *SendSelector) GetPathCount() int {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+	for _, p := range s.paths {
+		log.Println(p.Fingerprint)
+	}
 	return len(s.paths)
 }
 

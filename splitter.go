@@ -13,6 +13,19 @@ type SplitData struct {
 	data          [][]byte
 }
 
+func SplitDataFromByteArray(data [][]byte) (*SplitData, error) {
+	fragmentCount := len(data)
+	fragSize := len(data[0])
+	padlen := 0
+	s := &SplitData{
+		fragSize:      fragSize,
+		padlen:        padlen,
+		fragmentCount: fragmentCount,
+		data:          data,
+	}
+	return s, nil
+}
+
 func Split(data []byte, fragSize int) (*SplitData, error) {
 	if fragSize > MAX_FRAG_SIZE {
 		err := fmt.Errorf("fragment size greater than maximum allowable fragment size")

@@ -7,7 +7,11 @@ type Config struct {
 	Listen_port uint     `toml:"listen_port"`
 	Deadline    duration `toml:"deadline"`
 	FragSize    uint     `toml:"fragment_size"`
+	UdpSend     string   `toml:"udp_send"`
+	UdpRecv     string   `toml:"udp_recv"`
 	Remote      remote   `toml:"remote"`
+	DataCount   uint     `toml:"data_count"`
+	ParityCount uint     `toml:"parity_count"`
 }
 
 type remote struct {

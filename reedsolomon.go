@@ -32,6 +32,16 @@ func NewReedSolomon(dataCount int, parityCount int) (*ReedSolomon, error) {
 }
 
 func (r *ReedSolomon) Encode(sd *SplitData, parityCount int) (*EncodedData, error) {
+	if parityCount == 0 {
+		return &EncodedData{
+			dataCount:   sd.fragmentCount,
+			parityCount: parityCount,
+			fragSize:    sd.fragSize,
+			padlen:      sd.padlen,
+			data:        sd.data,
+		}, nil
+	}
+
 	if sd.fragmentCount != r.dataCount || r.parityCount != parityCount {
 		enc, err := reedsolomon.New(sd.fragmentCount, parityCount)
 		if err != nil {
@@ -58,6 +68,31 @@ func (r *ReedSolomon) Encode(sd *SplitData, parityCount int) (*EncodedData, erro
 		padlen:      sd.padlen,
 		data:        data,
 	}, nil
+}
+
+func (r *ReedSolomon) DecodeRTP(ed *EncodedData) ([][]byte, error) {
+	if ed.parityCount == 0 {
+		return ed.data, nil
+	}
+
+	if r.dataCount != ed.dataCount || r.parityCount != ed.parityCount {
+		enc, err := reedsolomon.New(ed.dataCount, ed.parityCount)
+		if err != nil {
+			return nil, err
+		}
+		r.encoder = enc
+		r.dataCount = ed.dataCount
+		r.parityCount = ed.parityCount
+	}
+	err := r.encoder.Reconstruct(ed.data)
+	if err != nil {
+		return nil, err
+	}
+	if ed.fragSize == 0 {
+		ed.fragSize = len(ed.data[0])
+	}
+
+	return ed.data[:ed.dataCount], nil
 }
 
 func (r *ReedSolomon) Decode(ed *EncodedData) ([]byte, error) {

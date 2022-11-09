@@ -5,7 +5,7 @@ import (
 )
 
 const (
-	MAX_BUFFER_SIZE = 1200
+	MAX_BUFFER_SIZE = 1500
 )
 
 type UDPProxy struct {
@@ -31,8 +31,8 @@ func NewUDPProxy(listenAddress *string, sendAddress *string) (*UDPProxy, error) 
 	udpProxy := &UDPProxy{
 		conn:        conn,
 		sendAddr:    raddr,
-		EgressChan:  make(chan []byte, 10),
-		IngressChan: make(chan []byte, 10),
+		EgressChan:  make(chan []byte, 500),
+		IngressChan: make(chan []byte, 500),
 	}
 	return udpProxy, nil
 }

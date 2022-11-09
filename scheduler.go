@@ -17,20 +17,28 @@ type Scheduler struct {
 
 func NewScheduler(ctx context.Context, cfg *Config) (*Scheduler, error) {
 	sendSelector := SendSelector{} //TODO: implement custom selector
-	retransmitSelector := pan.DefaultSelector{}
-	scionIngressChan := make(chan []byte, 10)
-	scionAckChan := make(chan []byte, 10)
-	scionRestransmitChan := make(chan []byte, 10)
-	retransmitChan := make(chan *DataBlock, 10)
-	ingressChan := make(chan *DataBlock, 10)
-	packetLossChan := make(chan int, 10)
+	retransmitSelector := SendSelector{}
+	scionIngressChan := make(chan []byte, 500)
+	scionAckChan := make(chan []byte, 500)
+	scionRestransmitChan := make(chan []byte, 500)
+	retransmitChan := make(chan *DataBlock, 500)
+	ingressChan := make(chan *DataBlock, 500)
+	paritySelector := SendSelector{}
+	ingressChanParity := make(chan []byte, 500)
+	packetLossChan := make(chan int, 20)
 	sender, err := NewScionSender(ctx, &cfg.Remote.ScionAddr,
 		&cfg.Listen_port, &sendSelector, &retransmitSelector, scionIngressChan,
-		scionAckChan, scionRestransmitChan)
+		scionAckChan, scionRestransmitChan, &paritySelector, ingressChanParity)
 	if err != nil {
 		return nil, err
 	}
-	sender.sendSelector.(*SendSelector).SetPath(1)
+	// sender.sendSelector.(*SendSelector).GetPathCount()
+	// sender.sendSelector.(*SendSelector).SetPath_s()
+	// sender.retransmitSelector.(*SendSelector).GetPathCount()
+	// sender.retransmitSelector.(*SendSelector).SetPath_r()
+	// sender.paritySelector.(*SendSelector).GetPathCount()
+	// sender.paritySelector.(*SendSelector).SetPath_r()
+	// fmt.Println("paths", sender.sendSelector.(*SendSelector).GetPathCount())
 	unAckQ := NewDataQueue(UnAck, nil, retransmitChan, &cfg.Deadline.Duration, packetLossChan)
 	scheduler := &Scheduler{
 		sender:             *sender,
@@ -50,7 +58,12 @@ func (s *Scheduler) Run() {
 			block := <-s.ingressChan
 			s.unAckQ.InsertBlock(block)
 			for _, v := range block.fragments {
-				s.sender.ingressChan <- v.data
+				if v.isParity {
+					s.sender.ingressChanParity <- v.data
+				} else {
+					s.sender.ingressChan <- v.data
+				}
+				// time.Sleep(10 * time.Microsecond)
 			}
 		}
 	}()
@@ -59,9 +72,13 @@ func (s *Scheduler) Run() {
 		for {
 			block := <-s.unAckQ.egressChan
 			for _, v := range block.fragments {
-				if !v.acked {
+				if !v.acked && v.retransmit {
 					s.sender.retransmitChan <- v.data
+					// log.Println("retransmit")
 				}
+				// if !v.acked {
+				// 	s.sender.retransmitChan <- v.data
+				// }
 			}
 		}
 	}()

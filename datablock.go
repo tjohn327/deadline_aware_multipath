@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sync"
+	"time"
 )
 
 type DataBlock struct {
@@ -15,6 +16,8 @@ type DataBlock struct {
 	complete      bool
 	canDecode     bool
 	unackedCount  int
+	retrCount     int
+	inTime        time.Time
 	mutex         sync.Mutex
 	fragments     []*DataFragment
 }
@@ -38,14 +41,74 @@ func NewDataBlockFromEncodedData(ed *EncodedData, blockID int) *DataBlock {
 	for i := 0; i < db.fragmentCount; i++ {
 		UpdateFragID(common_header, i)
 		header := make([]byte, headerSize)
+		isIDR := true
+		// h, err := parseRTPH264Header(ed.data[i][2:])
+		// if err != nil {
+		// 	if h.IsIDR {
+		// 		isIDR = true
+		// 		header[0] = IDR
+		// 	}
+		// }
+		isParity := false
 		copy(header, common_header)
+		if ed.parityCount > 0 {
+			if i >= ed.dataCount {
+				isParity = true
+			}
+		}
+
 		fragment := &DataFragment{
-			fragType:      0,
+			fragType:      int(header[0]),
 			blockID:       db.blockID,
 			fragmentID:    i,
 			fragmentCount: db.fragmentCount,
 			parityCount:   db.parityCount,
 			padlen:        db.padlen,
+			retransmit:    isIDR,
+			isParity:      isParity,
+			data:          append(header, ed.data[i]...),
+		}
+		db.fragments[i] = fragment
+	}
+	db.currentCount = db.fragmentCount
+	db.unackedCount = db.fragmentCount
+	db.complete = true
+	db.canDecode = true
+	return db
+}
+
+func NewDataBlockFromEncodedDataOption(ed *EncodedData, blockID int, restransmit bool) *DataBlock {
+	db := newDataBlock(blockID, ed.dataCount+ed.parityCount)
+	db.padlen = ed.padlen
+	db.parityCount = ed.parityCount
+	common_header := CreateHeader(db, 0)
+	for i := 0; i < db.fragmentCount; i++ {
+		UpdateFragID(common_header, i)
+		header := make([]byte, headerSize)
+		// h, err := parseRTPH264Header(ed.data[i][2:])
+		// if err != nil {
+		// 	if h.IsIDR {
+		// 		isIDR = true
+		// 		header[0] = IDR
+		// 	}
+		// }
+		isParity := false
+		copy(header, common_header)
+		if ed.parityCount > 0 {
+			if i >= ed.dataCount {
+				isParity = true
+			}
+		}
+
+		fragment := &DataFragment{
+			fragType:      int(header[0]),
+			blockID:       db.blockID,
+			fragmentID:    i,
+			fragmentCount: db.fragmentCount,
+			parityCount:   db.parityCount,
+			padlen:        db.padlen,
+			retransmit:    restransmit,
+			isParity:      isParity,
 			data:          append(header, ed.data[i]...),
 		}
 		db.fragments[i] = fragment
@@ -65,6 +128,7 @@ func NewDataBlockFromFragment(frag *DataFragment) *DataBlock {
 		padlen:        frag.padlen,
 		currentCount:  0,
 		complete:      false,
+		inTime:        time.Now(),
 		canDecode:     false,
 		fragments:     make([]*DataFragment, frag.fragmentCount),
 	}
@@ -97,7 +161,13 @@ func (db *DataBlock) InsertFragment(fragment *DataFragment) (bool, error) {
 		db.fragments[fragment.fragmentID] = fragment
 		db.currentCount++
 		db.unackedCount++
+
+		if fragment.isRetr {
+			// log.Println("retransmit fragment", fragment.fragmentID)
+			db.retrCount++
+		}
 		if db.currentCount == db.fragmentCount-db.parityCount {
+
 			db.canDecode = true
 		}
 		if db.fragmentCount == db.currentCount {
@@ -105,6 +175,9 @@ func (db *DataBlock) InsertFragment(fragment *DataFragment) (bool, error) {
 			db.complete = true
 			return true, nil
 		}
+
+		// log.Println(fragment.blockID, fragment.fragmentID, db.canDecode, db.currentCount, db.fragmentCount, db.parityCount)
+
 	}
 	return false, nil
 }
@@ -145,14 +218,19 @@ func (db *DataBlock) GetEncodedData() (*EncodedData, error) {
 const headerSize = 8
 
 type DataFragment struct {
-	fragType      int
-	blockID       int
-	fragmentID    int
-	fragmentCount int
-	parityCount   int
-	padlen        int
-	acked         bool
-	data          []byte
+	fragType        int
+	blockID         int
+	fragmentID      int
+	fragmentCount   int
+	parityCount     int
+	isParity        bool
+	isIDR           bool
+	isRetr          bool
+	padlen          int
+	acked           bool
+	retransmit      bool
+	retransmitCount int
+	data            []byte
 }
 
 // 0                   1                   2                   3
@@ -170,6 +248,11 @@ type DataFragment struct {
 // +                                               +-+-+-+-+-+-+-+-+
 // |                                               |    Padding    |
 // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+const (
+	NORETRANSMIT = byte(0)
+	IDR          = byte(1)
+)
 
 func CreateHeader(db *DataBlock, fragID int) []byte {
 	header := make([]byte, headerSize)

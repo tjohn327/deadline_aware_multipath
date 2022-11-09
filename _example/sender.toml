@@ -1,7 +1,11 @@
 gateway_type = "sender"
 listen_port = 16000
-deadline = "80ms"
+deadline = "130ms"
 fragment_size = 1200
+udp_send = "192.168.184.4:5688"
+udp_recv = "192.168.184.3:5688"
+data_count = 5
+parity_count = 10
 
 [remote]
-scion_addr = "19-ffaa:1:xxx,127.0.0.1:16000"
+scion_addr = "19-ffaa:1:bf5,127.0.0.1:16000"

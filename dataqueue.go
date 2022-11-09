@@ -18,8 +18,8 @@ const (
 	ReceiveMem
 )
 const (
-	MAX_QUEUE_LENGTH    = 50
-	defaultTrimInterval = 5000 * time.Millisecond
+	MAX_QUEUE_LENGTH    = 10000
+	defaultTrimInterval = 30 * time.Second
 )
 
 type DataQueue struct {
@@ -40,7 +40,7 @@ func NewDataQueue(t DataQueueType, ingressChan chan *DataFragment, egressChan ch
 	deadline *time.Duration, packetLossChan chan int) *DataQueue {
 
 	if ingressChan == nil {
-		ingressChan = make(chan *DataFragment, 10)
+		ingressChan = make(chan *DataFragment, 200)
 	}
 
 	dq := &DataQueue{
@@ -75,6 +75,18 @@ func (dq *DataQueue) runReceive() {
 			dq.InsertFragment(f)
 		}
 	}()
+
+	// go func() {
+	// 	for {
+	// 		out, _ := dq.GetDataBlock()
+
+	// 		if out != nil {
+	// 			dq.egressChan <- out
+	// 		}
+	// 		time.Sleep(10 * time.Millisecond)
+	// 	}
+
+	// }()
 }
 
 func (dq *DataQueue) runAck() {
@@ -111,14 +123,34 @@ func (dq *DataQueue) retransmit(blockID int) {
 	if out != nil {
 		loss := out.unackedCount
 		if out.unackedCount > out.parityCount {
-			log.Printf("retransmit- block: %d fragaments: %d", out.blockID, out.unackedCount)
+			// log.Printf("retransmit- block: %d fragments: %d", out.blockID, out.unackedCount)
 			dq.egressChan <- out
+			loss = out.unackedCount - out.parityCount
 		}
 		if dq.packetLossChan != nil {
 			dq.packetLossChan <- loss
 		}
 	}
 
+}
+
+func (dq *DataQueue) insertBlock(db *DataBlock) error {
+	_, in := dq.isDataBlockIn(db.blockID)
+	if !in {
+		dq.blocks = append(dq.blocks, db)
+		dq.len++
+		if dq.len == 1 {
+			dq.headBlockID = db.blockID
+			dq.tailBlockID = db.blockID
+		} else {
+			dq.tailBlockID = db.blockID
+		}
+		if dq.queueType == UnAck {
+			go dq.retransmit(db.blockID)
+		}
+		return nil
+	}
+	return fmt.Errorf("blockid: %d already exists", db.blockID)
 }
 
 func (dq *DataQueue) InsertBlock(db *DataBlock) error {
@@ -143,9 +175,23 @@ func (dq *DataQueue) InsertBlock(db *DataBlock) error {
 }
 
 func (dq *DataQueue) InsertFragment(f *DataFragment) {
+	dq.mutex.Lock()
+	defer dq.mutex.Unlock()
 	if f.blockID < dq.prevCompleteBlockId && dq.prevCompleteBlockId <= 65534 {
 		return
 	}
+	if f.blockID-1 > dq.prevCompleteBlockId {
+		x := dq.prevCompleteBlockId + 1
+		for j := x; j < f.blockID; j++ {
+			if i, ok := dq.isDataBlockIn(j); ok {
+				if dq.blocks[i].canDecode && dq.blocks[i].blockID > dq.prevCompleteBlockId {
+					dq.prevCompleteBlockId = dq.blocks[i].blockID
+					dq.egressChan <- dq.blocks[i]
+				}
+			}
+		}
+	}
+
 	i, in := dq.isDataBlockIn(f.blockID)
 	if in {
 		_, err := dq.blocks[i].InsertFragment(f)
@@ -153,28 +199,38 @@ func (dq *DataQueue) InsertFragment(f *DataFragment) {
 			log.Println("insert fragment:", err)
 			return
 		}
-		if dq.blocks[i].canDecode && dq.queueType == Receive && dq.egressChan != nil {
-			out := dq.getDataBlock(i)
-			if out != nil {
-				dq.prevCompleteBlockId = out.blockID
-				dq.egressChan <- out
-			}
+		if dq.blocks[i].canDecode && dq.blocks[i].blockID > dq.prevCompleteBlockId {
+			dq.prevCompleteBlockId = dq.blocks[i].blockID
+			dq.egressChan <- dq.blocks[i]
 		}
+
 	} else {
 		db := NewDataBlockFromFragment(f)
-		dq.InsertBlock(db)
+		dq.insertBlock(db)
 	}
 }
 
 func (dq *DataQueue) GetDataBlock() (*DataBlock, error) {
-	dq.mutex.Lock()
-	defer dq.mutex.Unlock()
+	// dq.mutex.Lock()
+	// defer dq.mutex.Unlock()
 	if dq.len == 0 {
 		err := fmt.Errorf("queue empty")
 		return nil, err
 	}
-	out := dq.getDataBlock(0)
-	return out, nil
+	if dq.blocks[0].canDecode {
+		out := dq.getDataBlock(0)
+		if out != nil {
+			dq.prevCompleteBlockId = out.blockID
+			return out, nil
+		}
+	} else if dq.blocks[0].inTime.Add(time.Duration(500 * time.Millisecond)).After(time.Now()) {
+		out := dq.getDataBlock(0)
+		fmt.Println("time out", out.blockID)
+		if out != nil {
+			return out, nil
+		}
+	}
+	return nil, nil
 }
 
 func (dq *DataQueue) getDataBlockByID(blockID int) *DataBlock {
@@ -208,7 +264,46 @@ func (dq *DataQueue) getDataBlock(i int) *DataBlock {
 		dq.headBlockID = 0
 		dq.tailBlockID = 0
 	}
+
 	return out
+}
+
+func copyBlock(dbin *DataBlock) *DataBlock {
+	dbout := &DataBlock{
+		blockID:       dbin.blockID,
+		fragments:     make([]*DataFragment, dbin.fragmentCount),
+		parityCount:   dbin.parityCount,
+		padlen:        dbin.padlen,
+		complete:      dbin.complete,
+		fragmentCount: dbin.fragmentCount,
+		canDecode:     dbin.canDecode,
+		inTime:        dbin.inTime,
+		unackedCount:  dbin.unackedCount,
+		currentCount:  dbin.currentCount,
+	}
+	for i, f := range dbin.fragments {
+		if f != nil {
+			if f.data != nil {
+				dbout.fragments[i] = &DataFragment{
+					blockID:    f.blockID,
+					fragmentID: f.fragmentID,
+					data:       make([]byte, len(f.data)),
+				}
+				if f.data != nil {
+					copy(dbout.fragments[i].data, f.data)
+				}
+			} else {
+				dbout.fragments[i] = &DataFragment{
+					blockID:    f.blockID,
+					fragmentID: f.fragmentID,
+					data:       nil,
+				}
+			}
+		}
+
+	}
+
+	return dbout
 }
 
 func (dq *DataQueue) isDataBlockIn(blockID int) (int, bool) {
