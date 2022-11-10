@@ -17,8 +17,9 @@ func NewReceiver(ctx context.Context, cfg *Config) (*Receiver, error) {
 	egressChanQ := make(chan *DataBlock, 500)
 	ackChan := make(chan []byte, 500)
 	reInChan := make(chan []byte, 500)
+	parityChan := make(chan []byte, 500)
 	scionReceiver, err := NewScionReceiver(ctx, &cfg.Remote.ScionAddr, &cfg.Listen_port,
-		ackSelector, nil, reInChan, ackChan)
+		ackSelector, nil, reInChan, ackChan, parityChan)
 	if err != nil {
 		return nil, err
 	}
@@ -45,22 +46,28 @@ func (r *Receiver) Run() {
 				frag, err := NewFragmentFromBytes(buf)
 				if err == nil {
 					frag.isRetr = true
-					if !r.receiveMemQ.IsDataBlockIn(frag.blockID) {
-						r.receiveQ.ingressChan <- frag
-					}
+					// if !r.receiveMemQ.IsDataBlockIn(frag.blockID) {
+					r.receiveQ.ingressChan <- frag
+					// }
 				}
 
 			case buf := <-r.receiver.egressChan:
 				frag, err := NewFragmentFromBytes(buf)
 				ack := frag.GetAckBytes()
 				if err == nil {
-					if !r.receiveMemQ.IsDataBlockIn(frag.blockID) {
-						r.receiveQ.ingressChan <- frag
-					}
+					// if !r.receiveMemQ.IsDataBlockIn(frag.blockID) {
+					r.receiveQ.ingressChan <- frag
+					// }
 					// if frag.fragType == int(NORETRANSMIT) {
 					// 	continue
 					// }
 					r.receiver.ackChan <- ack
+				}
+			case buf := <-r.receiver.parityChan:
+				frag, err := NewFragmentFromBytes(buf)
+				if err == nil {
+					frag.isParity = true
+					r.receiveQ.ingressChan <- frag
 				}
 			}
 
@@ -70,7 +77,7 @@ func (r *Receiver) Run() {
 	go func() {
 		for {
 			block := <-r.receiveQ.egressChan
-			r.receiveMemQ.InsertBlock(block)
+			// r.receiveMemQ.InsertBlock(block)
 			if block.canDecode {
 				// fmt.Println(block.blockID, block.currentCount, block.fragmentCount, block.canDecode)
 				r.egressChan <- block

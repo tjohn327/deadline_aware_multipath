@@ -15,23 +15,26 @@ import (
 )
 
 var (
-	errChan        = make(chan error, 1)
-	send_telemetry = true
-	dataCount      = 20
-	parityCount    = 2
-	pktSize        = 1202
-	udpSendAddr    = "127.0.0.1:5688"
-	udpRecvAddr    = "127.0.0.1:5688"
-	deadline       = time.Duration(200 * time.Millisecond)
-	TEST_UDP       = true
-	cs             *csvutil
-	t0             = time.Now().UnixMilli()
-	timedata       timeData
-	delayms        = 33
-	mode           = 3 // 0 udp 1 retr 2 fec 3 fec+retr
-	runDuration    = time.Duration(10 * time.Second)
-	DATA_COUNT     = 159
-	MAX_PARITY     = 30
+	errChan           = make(chan error, 1)
+	send_telemetry    = true
+	dataCount         = 20
+	parityCount       = 0
+	pktSize           = 1202
+	udpSendAddr       = "127.0.0.1:5688"
+	udpRecvAddr       = "127.0.0.1:5688"
+	deadline          = time.Duration(200 * time.Millisecond)
+	TEST_UDP          = true
+	cs                *csvutil
+	t0                = time.Now().UnixMilli()
+	timedata          timeData
+	delayms           = 33
+	mode              = 3 // 0 udp 1 retr 2 fec 3 fec+retr
+	runDuration       = time.Duration(10 * time.Second)
+	DATA_COUNT        = 159
+	MAX_PARITY        = 32
+	receiveParityChan = make(chan TimeEntry, 200)
+	receiveRetrChan   = make(chan TimeEntry, 200)
+
 	// t0             = time.Now().UnixMilli()
 )
 
@@ -39,8 +42,8 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt)
 
-	filename := flag.String("f", "entries", "filename for csv")
-	configFile := flag.String("c", "", "location of the config file")
+	filename := flag.String("f", "entries.csv", "filename for csv")
+	configFile := flag.String("c", "_example/sender.toml", "location of the config file")
 	delay := flag.Int("d", 33, "delay in ms")
 	duration := flag.Int("t", 10, "duration in seconds")
 	modeFlag := flag.Int("m", 3, "mode")
@@ -69,12 +72,14 @@ func main() {
 	deadline = cfg.Deadline.Duration
 
 	timedata = NewTimeData(*filename, int(deadline.Milliseconds()))
+	timedata.receiveParityChan = receiveParityChan
+	timedata.receiveRetrChan = receiveRetrChan
 	go timedata.run()
 
 	t0 = time.Now().UnixMilli()
 
 	go RunReceiver(&cfg)
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 	go RunSender(&cfg)
 
 	select {
@@ -139,7 +144,7 @@ func RunSender(cfg *Config) {
 	go func() {
 		blockID := 0
 		csvchan := cs.getInChan()
-		decoders := make(map[int]*ReedSolomon)
+		decoders := make([]*ReedSolomon, MAX_PARITY+1)
 		for i := 0; i <= MAX_PARITY; i++ {
 			decoders[i], _ = NewReedSolomon(dataCount, i)
 		}
@@ -170,10 +175,14 @@ func RunSender(cfg *Config) {
 			// 	fragmentCount: dataCount,
 			// 	data:          pkts,
 			// }
-			_parityCount := manager.parityCount
+			_parityCount := manager.GetParityCount()
+			// receiveParityChan <- TimeEntry{id: blockID, parity: _parityCount}
 			// _parityCount := 2
 			if !doEncode {
 				_parityCount = 0
+			}
+			if _parityCount > MAX_PARITY {
+				_parityCount = MAX_PARITY
 			}
 			encodedData, err := decoders[_parityCount].Encode(split, _parityCount)
 			checkNonFatal(err)
@@ -190,7 +199,7 @@ func RunSender(cfg *Config) {
 			entry := fmt.Sprintf("%d,send,%d,%d\n", t1-t0, db.blockID, db.parityCount)
 			csvchan <- entry
 			scheduler.Send(db)
-			timedata.sendChan <- timeEntry{id: db.blockID, in: t1 - t0}
+			timedata.sendChan <- TimeEntry{id: db.blockID, in: t1 - t0, parity: db.parityCount}
 			if blockID > 65534 {
 				blockID = 0
 			} else {
@@ -231,7 +240,7 @@ func RunReceiver(cfg *Config) {
 	// }
 	go func() {
 		csvchan := cs.getInChan()
-		decoders := make(map[int]*ReedSolomon)
+		decoders := make([]*ReedSolomon, MAX_PARITY+1)
 		for i := 0; i <= MAX_PARITY; i++ {
 			decoders[i], _ = NewReedSolomon(dataCount, i)
 		}
@@ -264,7 +273,7 @@ func RunReceiver(cfg *Config) {
 			checkNonFatal(err)
 			egressChan <- data
 			t1 := time.Now().UnixMilli()
-			timedata.receiveChan <- timeEntry{id: db.blockID, out: t1 - t0, parity: db.parityCount, retr: db.retrCount}
+			timedata.receiveChan <- TimeEntry{id: db.blockID, out: t1 - t0}
 			entry := fmt.Sprintf("%d,receive,%d,%d\n", t1-t0, db.blockID, db.parityCount)
 			csvchan <- entry
 			// if send_telemetry {

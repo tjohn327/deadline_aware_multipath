@@ -3,32 +3,30 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 )
 
 type DataBlock struct {
-	blockID       int
-	fragmentCount int
-	parityCount   int
-	padlen        int
-	currentCount  int
-	complete      bool
-	canDecode     bool
-	unackedCount  int
-	retrCount     int
-	inTime        time.Time
-	mutex         sync.Mutex
-	fragments     []*DataFragment
+	complete            bool
+	canDecode           bool
+	blockID             int
+	fragmentCount       int
+	parityCount         int
+	padlen              int
+	currentCount        int
+	unackedCount        int
+	retransmissionCount int
+	inTime              time.Time
+	mutex               sync.Mutex
+	fragments           []*DataFragment
 }
 
 func newDataBlock(blockID int, fragmentCount int) *DataBlock {
 	return &DataBlock{
 		blockID:       blockID,
 		fragmentCount: fragmentCount,
-		currentCount:  0,
-		complete:      false,
-		canDecode:     false,
 		fragments:     make([]*DataFragment, fragmentCount),
 	}
 }
@@ -41,7 +39,7 @@ func NewDataBlockFromEncodedData(ed *EncodedData, blockID int) *DataBlock {
 	for i := 0; i < db.fragmentCount; i++ {
 		UpdateFragID(common_header, i)
 		header := make([]byte, headerSize)
-		isIDR := true
+		// isIDR := true
 		// h, err := parseRTPH264Header(ed.data[i][2:])
 		// if err != nil {
 		// 	if h.IsIDR {
@@ -64,14 +62,13 @@ func NewDataBlockFromEncodedData(ed *EncodedData, blockID int) *DataBlock {
 			fragmentCount: db.fragmentCount,
 			parityCount:   db.parityCount,
 			padlen:        db.padlen,
-			retransmit:    isIDR,
 			isParity:      isParity,
 			data:          append(header, ed.data[i]...),
 		}
 		db.fragments[i] = fragment
 	}
 	db.currentCount = db.fragmentCount
-	db.unackedCount = db.fragmentCount
+	db.unackedCount = db.fragmentCount - db.parityCount
 	db.complete = true
 	db.canDecode = true
 	return db
@@ -85,21 +82,11 @@ func NewDataBlockFromEncodedDataOption(ed *EncodedData, blockID int, restransmit
 	for i := 0; i < db.fragmentCount; i++ {
 		UpdateFragID(common_header, i)
 		header := make([]byte, headerSize)
-		// h, err := parseRTPH264Header(ed.data[i][2:])
-		// if err != nil {
-		// 	if h.IsIDR {
-		// 		isIDR = true
-		// 		header[0] = IDR
-		// 	}
-		// }
 		isParity := false
 		copy(header, common_header)
-		if ed.parityCount > 0 {
-			if i >= ed.dataCount {
-				isParity = true
-			}
+		if i >= ed.dataCount {
+			isParity = true
 		}
-
 		fragment := &DataFragment{
 			fragType:      int(header[0]),
 			blockID:       db.blockID,
@@ -114,7 +101,7 @@ func NewDataBlockFromEncodedDataOption(ed *EncodedData, blockID int, restransmit
 		db.fragments[i] = fragment
 	}
 	db.currentCount = db.fragmentCount
-	db.unackedCount = db.fragmentCount
+	db.unackedCount = db.fragmentCount - db.parityCount
 	db.complete = true
 	db.canDecode = true
 	return db
@@ -124,17 +111,19 @@ func NewDataBlockFromFragment(frag *DataFragment) *DataBlock {
 	db := &DataBlock{
 		blockID:       frag.blockID,
 		fragmentCount: frag.fragmentCount,
+		unackedCount:  frag.fragmentCount,
 		parityCount:   frag.parityCount,
 		padlen:        frag.padlen,
-		currentCount:  0,
-		complete:      false,
 		inTime:        time.Now(),
-		canDecode:     false,
 		fragments:     make([]*DataFragment, frag.fragmentCount),
 	}
-	db.InsertFragment(frag)
+	_, err := db.InsertFragment(frag)
+	if err != nil {
+		log.Println(err)
+	}
 	return db
 }
+
 func (db *DataBlock) AcknowledgeFragment(f *DataFragment) {
 	if db.blockID != f.blockID {
 		return
@@ -151,6 +140,7 @@ func (db *DataBlock) AcknowledgeFragment(f *DataFragment) {
 func (db *DataBlock) InsertFragment(fragment *DataFragment) (bool, error) {
 	db.mutex.Lock()
 	defer db.mutex.Unlock()
+
 	if fragment.blockID != db.blockID {
 		return false, fmt.Errorf("frameID mismatch")
 	}
@@ -160,14 +150,10 @@ func (db *DataBlock) InsertFragment(fragment *DataFragment) (bool, error) {
 	if db.fragments[fragment.fragmentID] == nil {
 		db.fragments[fragment.fragmentID] = fragment
 		db.currentCount++
-		db.unackedCount++
-
 		if fragment.isRetr {
-			// log.Println("retransmit fragment", fragment.fragmentID)
-			db.retrCount++
+			db.retransmissionCount++
 		}
 		if db.currentCount == db.fragmentCount-db.parityCount {
-
 			db.canDecode = true
 		}
 		if db.fragmentCount == db.currentCount {
@@ -175,9 +161,6 @@ func (db *DataBlock) InsertFragment(fragment *DataFragment) (bool, error) {
 			db.complete = true
 			return true, nil
 		}
-
-		// log.Println(fragment.blockID, fragment.fragmentID, db.canDecode, db.currentCount, db.fragmentCount, db.parityCount)
-
 	}
 	return false, nil
 }
@@ -218,17 +201,17 @@ func (db *DataBlock) GetEncodedData() (*EncodedData, error) {
 const headerSize = 8
 
 type DataFragment struct {
+	isParity        bool
+	isIDR           bool
+	isRetr          bool
+	acked           bool
+	retransmit      bool
 	fragType        int
 	blockID         int
 	fragmentID      int
 	fragmentCount   int
 	parityCount     int
-	isParity        bool
-	isIDR           bool
-	isRetr          bool
 	padlen          int
-	acked           bool
-	retransmit      bool
 	retransmitCount int
 	data            []byte
 }

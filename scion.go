@@ -46,6 +46,7 @@ type ScionReceiver struct {
 	egressChan       chan []byte
 	reInChan         chan []byte
 	ackChan          chan []byte
+	parityChan       chan []byte
 }
 
 func NewScionSender(ctx context.Context, sendAddress *string, port *uint,
@@ -248,7 +249,7 @@ func NewScionSender(ctx context.Context, sendAddress *string, port *uint,
 
 func NewScionReceiver(ctx context.Context, sendAddress *string, port *uint,
 	sendSelector pan.Selector, egressChan chan []byte, reInChan chan []byte,
-	ackChan chan []byte) (*ScionReceiver, error) {
+	ackChan chan []byte, parityChan chan []byte) (*ScionReceiver, error) {
 
 	// reInChan := make(chan []byte, 500)
 	ns, err := netns.GetFromName("ns2")
@@ -343,6 +344,7 @@ func NewScionReceiver(ctx context.Context, sendAddress *string, port *uint,
 		egressChan:       egressChan,
 		ackChan:          ackChan,
 		reInChan:         reInChan,
+		parityChan:       parityChan,
 	}
 
 	// ns.Close()
@@ -374,7 +376,7 @@ func NewScionReceiver(ctx context.Context, sendAddress *string, port *uint,
 			}
 			buf := make([]byte, n)
 			copy(buf, buffer[:n])
-			receiver.egressChan <- buf
+			receiver.parityChan <- buf
 		}
 	}()
 

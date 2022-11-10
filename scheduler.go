@@ -12,7 +12,7 @@ type Scheduler struct {
 	retransmitSelector pan.Selector
 	ingressChan        chan *DataBlock
 	unAckQ             *DataQueue
-	packetLossChan     chan int
+	packetLossChan     chan float64
 }
 
 func NewScheduler(ctx context.Context, cfg *Config) (*Scheduler, error) {
@@ -25,7 +25,7 @@ func NewScheduler(ctx context.Context, cfg *Config) (*Scheduler, error) {
 	ingressChan := make(chan *DataBlock, 500)
 	paritySelector := SendSelector{}
 	ingressChanParity := make(chan []byte, 500)
-	packetLossChan := make(chan int, 20)
+	packetLossChan := make(chan float64, 100)
 	sender, err := NewScionSender(ctx, &cfg.Remote.ScionAddr,
 		&cfg.Listen_port, &sendSelector, &retransmitSelector, scionIngressChan,
 		scionAckChan, scionRestransmitChan, &paritySelector, ingressChanParity)
@@ -56,7 +56,7 @@ func (s *Scheduler) Run() {
 	go func() {
 		for {
 			block := <-s.ingressChan
-			s.unAckQ.InsertBlock(block)
+			s.unAckQ.Enqueue(block)
 			for _, v := range block.fragments {
 				if v.isParity {
 					s.sender.ingressChanParity <- v.data

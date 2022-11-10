@@ -3,20 +3,20 @@ package main
 import "sync"
 
 type Stats struct {
-	packetLoss []int
+	packetLoss []float64
 	length     int
 	mutex      sync.Mutex
 }
 
 func NewStats(length int) *Stats {
 	stats := &Stats{
-		packetLoss: make([]int, 0),
+		packetLoss: make([]float64, 0),
 		length:     length,
 	}
 	return stats
 }
 
-func (s *Stats) InsertPacketLoss(loss int) {
+func (s *Stats) InsertPacketLoss(loss float64) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	if len(s.packetLoss) < s.length {
@@ -26,10 +26,10 @@ func (s *Stats) InsertPacketLoss(loss int) {
 	}
 }
 
-func (s *Stats) GetLatestPacketLoss() int {
+func (s *Stats) GetLatestPacketLoss() float64 {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	loss := 0
+	loss := 0.0
 	if len(s.packetLoss) > 0 {
 		loss = s.packetLoss[len(s.packetLoss)-1]
 	}
@@ -41,11 +41,26 @@ func (s *Stats) GetAveragePacketLoss() float64 {
 	defer s.mutex.Unlock()
 	avg := 0.0
 	if len(s.packetLoss) > 0 {
-		sum := 0
+		sum := 0.0
 		for _, v := range s.packetLoss {
 			sum = sum + v
 		}
 		avg = float64(sum) / float64(s.length)
 	}
 	return avg
+}
+
+func (s *Stats) GetMaxPacketLoss() float64 {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	max := 0.0
+	if len(s.packetLoss) > 0 {
+		max = s.packetLoss[0]
+		for _, v := range s.packetLoss {
+			if v > max {
+				max = v
+			}
+		}
+	}
+	return max
 }
