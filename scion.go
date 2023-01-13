@@ -63,7 +63,7 @@ func NewScionSender(ctx context.Context, sendAddress *string, port *uint,
 	var ackListenConn net.Conn
 	var sendConn net.Conn
 
-	sendAddr, err := net.ResolveUDPAddr("udp", "10.2.0.2:30001")
+	sendAddr, err := net.ResolveUDPAddr("udp", "10.3.0.2:30001")
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +79,7 @@ func NewScionSender(ctx context.Context, sendAddress *string, port *uint,
 	if err != nil {
 		return nil, err
 	}
-	laddr, err := net.ResolveUDPAddr("udp", "10.2.0.1:30001")
+	laddr, err := net.ResolveUDPAddr("udp", "10.3.0.1:30001")
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +171,7 @@ func NewScionSender(ctx context.Context, sendAddress *string, port *uint,
 				// 	continue
 				// }
 				_, err := sender.sendConn.Write(buf)
-				// time.Sleep(time.Microsecond * 10)
+				// time.Sleep(time.Microsecond * 1)
 				if err != nil {
 					// errChan <- err
 					log.Println("scion send:", err)
@@ -268,7 +268,7 @@ func NewScionReceiver(ctx context.Context, sendAddress *string, port *uint,
 	var listenConnParity net.Conn
 	var ackSendConn net.Conn
 
-	lAddr, err := net.ResolveUDPAddr("udp", "10.2.0.2:30001")
+	lAddr, err := net.ResolveUDPAddr("udp", "10.3.0.2:30001")
 	if err != nil {
 		return nil, err
 	}

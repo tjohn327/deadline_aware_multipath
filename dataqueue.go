@@ -16,13 +16,14 @@ const (
 	ReceiveMem
 )
 const (
-	MAX_QUEUE_LENGTH    = 1000
+	MAX_QUEUE_LENGTH    = 4000
 	defaultTrimInterval = 30 * time.Second
 )
 
 //Ring buffer implementation of DataQueue
 type DataQueue struct {
 	started             bool
+	streamID            int
 	queueType           DataQueueType
 	head                int
 	tail                int
@@ -38,7 +39,7 @@ type DataQueue struct {
 }
 
 func NewDataQueue(t DataQueueType, ingressChan chan *DataFragment, egressChan chan *DataBlock,
-	deadline *time.Duration, packetLossChan chan float64) *DataQueue {
+	deadline *time.Duration, packetLossChan chan float64, streamID int) *DataQueue {
 
 	if ingressChan == nil {
 		ingressChan = make(chan *DataFragment, 200)
@@ -50,6 +51,7 @@ func NewDataQueue(t DataQueueType, ingressChan chan *DataFragment, egressChan ch
 		prevCompleteBlockId: -1,
 		currentBlockId:      -1,
 		deadline:            deadline,
+		streamID:            streamID,
 		blocks:              make([]*DataBlock, MAX_QUEUE_LENGTH),
 		ingressChan:         ingressChan,
 		egressChan:          egressChan,
@@ -119,26 +121,30 @@ func (dq *DataQueue) retransmit(blockID int) {
 	deadline := (*dq.deadline)
 	timer := time.NewTimer(deadline)
 	<-timer.C
-	dq.mutex.Lock()
-	defer dq.mutex.Unlock()
+	// dq.mutex.Lock()
+	// defer dq.mutex.Unlock()
 	if i, ok := dq.isBlockIDInQueue(blockID); ok {
 		out := dq.blocks[i]
 		// loss := float64(out.unackedCount) / float64(out.fragmentCount)
 		loss := float64(out.unackedCount)
 		retr := 0
 
-		if out.unackedCount > out.parityCount {
-			// log.Printf("retransmit- block: %d fragments: %d", out.blockID, out.unackedCount)
-			if out.unackedCount < (out.fragmentCount-out.parityCount)/2 {
-				dq.egressChan <- out
-				retr = out.unackedCount
-			}
+		if out.unackedCount > out.parityCount && out.restransmit {
+			// fmt.Printf("retransmit- stream %d block: %d fragments: %d  %f \n", out.streamID, out.blockID, out.unackedCount, loss)
+
+			// if out.unackedCount < (out.fragmentCount-out.parityCount)/2 {
+			dq.egressChan <- out
+			retr = out.unackedCount
+			// }
 			// loss = out.unackedCount - out.parityCount
 		}
-		receiveRetrChan <- TimeEntry{id: out.blockID, retr: retr, loss: out.unackedCount}
-		if dq.packetLossChan != nil {
-			dq.packetLossChan <- loss
+		if mainloss == 100 {
+			retr = DATA_COUNT
 		}
+		receiveRetrChan <- TimeEntry{streamID: out.streamID, id: out.blockID, retr: retr, loss: float64(out.unackedCount)}
+		// if dq.packetLossChan != nil {
+		pktloss <- loss
+		// }
 	}
 
 }
@@ -186,7 +192,7 @@ func (dq *DataQueue) isBlockIDInQueue(blockID int) (int, bool) {
 }
 
 func (dq *DataQueue) eject() {
-	time.Sleep(40 * time.Millisecond)
+	time.Sleep(60 * time.Millisecond)
 	// deadline := time.Duration((20) * time.Millisecond)
 	// timer := time.NewTimer(deadline)
 	// <-timer.C
@@ -208,7 +214,7 @@ func (dq *DataQueue) eject() {
 			dq.mutex.Unlock()
 
 		}
-		time.Sleep(1 * time.Millisecond)
+		// time.Sleep(1 * time.Millisecond)
 	}
 	// if i, ok := dq.isBlockIDInQueue(blockID); ok {
 	// 	out := dq.blocks[i]
@@ -414,6 +420,7 @@ func copyBlock(dbin *DataBlock) *DataBlock {
 		parityCount:   dbin.parityCount,
 		padlen:        dbin.padlen,
 		complete:      dbin.complete,
+		streamID:      dbin.streamID,
 		fragmentCount: dbin.fragmentCount,
 		canDecode:     dbin.canDecode,
 		inTime:        dbin.inTime,

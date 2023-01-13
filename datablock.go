@@ -15,24 +15,28 @@ type DataBlock struct {
 	fragmentCount       int
 	parityCount         int
 	padlen              int
+	streamID            int
 	currentCount        int
 	unackedCount        int
 	retransmissionCount int
+	restransmit         bool
 	inTime              time.Time
 	mutex               sync.Mutex
 	fragments           []*DataFragment
 }
 
-func newDataBlock(blockID int, fragmentCount int) *DataBlock {
+func newDataBlock(blockID int, fragmentCount int, streamID int, retransmit bool) *DataBlock {
 	return &DataBlock{
 		blockID:       blockID,
 		fragmentCount: fragmentCount,
+		streamID:      streamID,
+		restransmit:   retransmit,
 		fragments:     make([]*DataFragment, fragmentCount),
 	}
 }
 
-func NewDataBlockFromEncodedData(ed *EncodedData, blockID int) *DataBlock {
-	db := newDataBlock(blockID, ed.dataCount+ed.parityCount)
+func NewDataBlockFromEncodedData(ed *EncodedData, blockID int, streamID int) *DataBlock {
+	db := newDataBlock(blockID, ed.dataCount+ed.parityCount, streamID, false)
 	db.padlen = ed.padlen
 	db.parityCount = ed.parityCount
 	common_header := CreateHeader(db, 0)
@@ -60,6 +64,7 @@ func NewDataBlockFromEncodedData(ed *EncodedData, blockID int) *DataBlock {
 			blockID:       db.blockID,
 			fragmentID:    i,
 			fragmentCount: db.fragmentCount,
+			streamID:      db.streamID,
 			parityCount:   db.parityCount,
 			padlen:        db.padlen,
 			isParity:      isParity,
@@ -74,8 +79,8 @@ func NewDataBlockFromEncodedData(ed *EncodedData, blockID int) *DataBlock {
 	return db
 }
 
-func NewDataBlockFromEncodedDataOption(ed *EncodedData, blockID int, restransmit bool) *DataBlock {
-	db := newDataBlock(blockID, ed.dataCount+ed.parityCount)
+func NewDataBlockFromEncodedDataOption(ed *EncodedData, blockID int, retransmit bool, streamID int) *DataBlock {
+	db := newDataBlock(blockID, ed.dataCount+ed.parityCount, streamID, retransmit)
 	db.padlen = ed.padlen
 	db.parityCount = ed.parityCount
 	common_header := CreateHeader(db, 0)
@@ -93,8 +98,9 @@ func NewDataBlockFromEncodedDataOption(ed *EncodedData, blockID int, restransmit
 			fragmentID:    i,
 			fragmentCount: db.fragmentCount,
 			parityCount:   db.parityCount,
+			streamID:      db.streamID,
 			padlen:        db.padlen,
-			retransmit:    restransmit,
+			retransmit:    retransmit,
 			isParity:      isParity,
 			data:          append(header, ed.data[i]...),
 		}
@@ -113,6 +119,7 @@ func NewDataBlockFromFragment(frag *DataFragment) *DataBlock {
 		fragmentCount: frag.fragmentCount,
 		unackedCount:  frag.fragmentCount,
 		parityCount:   frag.parityCount,
+		streamID:      frag.streamID,
 		padlen:        frag.padlen,
 		inTime:        time.Now(),
 		fragments:     make([]*DataFragment, frag.fragmentCount),
@@ -198,7 +205,7 @@ func (db *DataBlock) GetEncodedData() (*EncodedData, error) {
 // 	return false
 // }
 
-const headerSize = 8
+const headerSize = 10
 
 type DataFragment struct {
 	isParity        bool
@@ -207,6 +214,7 @@ type DataFragment struct {
 	acked           bool
 	retransmit      bool
 	fragType        int
+	streamID        int
 	blockID         int
 	fragmentID      int
 	fragmentCount   int
@@ -219,9 +227,9 @@ type DataFragment struct {
 // 0                   1                   2                   3
 // 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |      Type     |             BlockID           |     FragID    |
+// |      Type     |   StreamID    |             FrameID           |
 // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |    FragCount  |  ParityCount  |          PadLength            |
+// |     FragID    |    FragCount  |  ParityCount  |   PadLength   |
 // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 // |                              Data                             |
 // +                                                               +
@@ -245,6 +253,8 @@ func CreateHeader(db *DataBlock, fragID int) []byte {
 	header[4] = byte(uint8(db.fragmentCount))
 	header[5] = byte(uint8(db.parityCount))
 	binary.BigEndian.PutUint16(header[6:8], uint16(db.padlen))
+	binary.BigEndian.PutUint16(header[8:10], uint16(db.streamID))
+
 	return header
 }
 func UpdateFragID(header []byte, fragID int) {
@@ -263,6 +273,7 @@ func NewFragmentFromBytes(data []byte) (*DataFragment, error) {
 		fragmentCount: int(data[4]),
 		parityCount:   int(data[5]),
 		padlen:        int(binary.BigEndian.Uint16(data[6:8])),
+		streamID:      int(binary.BigEndian.Uint16(data[8:10])),
 		acked:         false,
 		data:          data,
 	}, nil

@@ -11,21 +11,20 @@ type Scheduler struct {
 	sendSelector       pan.Selector
 	retransmitSelector pan.Selector
 	ingressChan        chan *DataBlock
-	unAckQ             *DataQueue
+	unAckQ             map[int]*DataQueue
 	packetLossChan     chan float64
 }
 
-func NewScheduler(ctx context.Context, cfg *Config) (*Scheduler, error) {
+func NewScheduler(ctx context.Context, cfg *Config, numStream int) (*Scheduler, error) {
 	sendSelector := SendSelector{} //TODO: implement custom selector
 	retransmitSelector := SendSelector{}
 	scionIngressChan := make(chan []byte, 500)
 	scionAckChan := make(chan []byte, 500)
 	scionRestransmitChan := make(chan []byte, 500)
-	retransmitChan := make(chan *DataBlock, 500)
 	ingressChan := make(chan *DataBlock, 500)
 	paritySelector := SendSelector{}
 	ingressChanParity := make(chan []byte, 500)
-	packetLossChan := make(chan float64, 100)
+	packetLossChan := make(chan float64, 1000)
 	sender, err := NewScionSender(ctx, &cfg.Remote.ScionAddr,
 		&cfg.Listen_port, &sendSelector, &retransmitSelector, scionIngressChan,
 		scionAckChan, scionRestransmitChan, &paritySelector, ingressChanParity)
@@ -39,13 +38,18 @@ func NewScheduler(ctx context.Context, cfg *Config) (*Scheduler, error) {
 	// sender.paritySelector.(*SendSelector).GetPathCount()
 	// sender.paritySelector.(*SendSelector).SetPath_r()
 	// fmt.Println("paths", sender.sendSelector.(*SendSelector).GetPathCount())
-	unAckQ := NewDataQueue(UnAck, nil, retransmitChan, &cfg.Deadline.Duration, packetLossChan)
+	UnAckQ := make(map[int]*DataQueue)
+	for i := 0; i < numStream; i++ {
+		retransmitChan := make(chan *DataBlock, 500)
+		UnAckQ[i] = NewDataQueue(UnAck, nil, retransmitChan, &cfg.Deadline.Duration, packetLossChan, i)
+	}
+	// unAckQ := NewDataQueue(UnAck, nil, retransmitChan, &cfg.Deadline.Duration, packetLossChan)
 	scheduler := &Scheduler{
 		sender:             *sender,
 		sendSelector:       &sendSelector,
 		retransmitSelector: &retransmitSelector,
 		ingressChan:        ingressChan,
-		unAckQ:             unAckQ,
+		unAckQ:             UnAckQ,
 		packetLossChan:     packetLossChan,
 	}
 	return scheduler, nil
@@ -56,10 +60,12 @@ func (s *Scheduler) Run() {
 	go func() {
 		for {
 			block := <-s.ingressChan
-			s.unAckQ.Enqueue(block)
+			s.unAckQ[block.streamID].Enqueue(block)
 			for _, v := range block.fragments {
 				if v.isParity {
 					s.sender.ingressChanParity <- v.data
+				} else if mainloss == 100 {
+					s.sender.retransmitChan <- v.data
 				} else {
 					s.sender.ingressChan <- v.data
 				}
@@ -68,27 +74,31 @@ func (s *Scheduler) Run() {
 		}
 	}()
 	//retransmit
-	go func() {
-		for {
-			block := <-s.unAckQ.egressChan
-			for _, v := range block.fragments {
-				if !v.acked && v.retransmit {
-					s.sender.retransmitChan <- v.data
-					// log.Println("retransmit")
+
+	for _, unAckQ := range s.unAckQ {
+		q := unAckQ
+		go func() {
+			for {
+				block := <-q.egressChan
+				for _, v := range block.fragments {
+					if !v.acked && v.retransmit {
+						s.sender.retransmitChan <- v.data
+						// log.Println("retransmit")
+					}
+					// if !v.acked {
+					// 	s.sender.retransmitChan <- v.data
+					// }
 				}
-				// if !v.acked {
-				// 	s.sender.retransmitChan <- v.data
-				// }
 			}
-		}
-	}()
+		}()
+	}
 	//receive and process ack
 	go func() {
 		for {
 			ack := <-s.sender.ackChan
 			frag, err := NewFragmentFromBytes(ack)
 			if err == nil {
-				s.unAckQ.ingressChan <- frag
+				s.unAckQ[frag.streamID].ingressChan <- frag
 			}
 		}
 	}()

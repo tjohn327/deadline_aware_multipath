@@ -17,18 +17,19 @@ func NewStats(length int) *Stats {
 }
 
 func (s *Stats) InsertPacketLoss(loss float64) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	// s.mutex.Lock()
+	// defer s.mutex.Unlock()
 	if len(s.packetLoss) < s.length {
 		s.packetLoss = append(s.packetLoss, loss)
 	} else {
 		s.packetLoss = append(s.packetLoss[1:], loss)
 	}
+	csvloss = s.GetAveragePacketLoss()
 }
 
 func (s *Stats) GetLatestPacketLoss() float64 {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	// s.mutex.Lock()
+	// defer s.mutex.Unlock()
 	loss := 0.0
 	if len(s.packetLoss) > 0 {
 		loss = s.packetLoss[len(s.packetLoss)-1]
@@ -37,8 +38,8 @@ func (s *Stats) GetLatestPacketLoss() float64 {
 }
 
 func (s *Stats) GetAveragePacketLoss() float64 {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	// s.mutex.Lock()
+	// defer s.mutex.Unlock()
 	avg := 0.0
 	if len(s.packetLoss) > 0 {
 		sum := 0.0
@@ -51,8 +52,8 @@ func (s *Stats) GetAveragePacketLoss() float64 {
 }
 
 func (s *Stats) GetMaxPacketLoss() float64 {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	// s.mutex.Lock()
+	// defer s.mutex.Unlock()
 	max := 0.0
 	if len(s.packetLoss) > 0 {
 		max = s.packetLoss[0]

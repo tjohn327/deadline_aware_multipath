@@ -7,14 +7,13 @@ import (
 type Receiver struct {
 	receiver    *ScionReceiver
 	egressChan  chan *DataBlock
-	receiveQ    *DataQueue
-	receiveMemQ *DataQueue
+	receiveQ    map[int]*DataQueue
+	receiveMemQ map[int]*DataQueue
 }
 
-func NewReceiver(ctx context.Context, cfg *Config) (*Receiver, error) {
+func NewReceiver(ctx context.Context, cfg *Config, numStreams int) (*Receiver, error) {
 	ackSelector := &SendSelector{}
 	egressChan := make(chan *DataBlock, 500)
-	egressChanQ := make(chan *DataBlock, 500)
 	ackChan := make(chan []byte, 500)
 	reInChan := make(chan []byte, 500)
 	parityChan := make(chan []byte, 500)
@@ -26,8 +25,13 @@ func NewReceiver(ctx context.Context, cfg *Config) (*Receiver, error) {
 	scionReceiver.ackSelector.(*SendSelector).GetPathCount()
 	scionReceiver.ackSelector.(*SendSelector).SetPath_r()
 
-	receiveQ := NewDataQueue(Receive, nil, egressChanQ, &deadline, nil)
-	receiveMemQ := NewDataQueue(ReceiveMem, nil, nil, nil, nil)
+	receiveQ := make(map[int]*DataQueue)
+	receiveMemQ := make(map[int]*DataQueue)
+	for i := 0; i < numStreams; i++ {
+		egressChanQ := make(chan *DataBlock, 500)
+		receiveQ[i] = NewDataQueue(Receive, nil, egressChanQ, &cfg.Deadline.Duration, nil, i)
+		receiveMemQ[i] = NewDataQueue(ReceiveMem, nil, nil, nil, nil, i)
+	}
 
 	receiver := &Receiver{
 		receiver:    scionReceiver,
@@ -47,7 +51,7 @@ func (r *Receiver) Run() {
 				if err == nil {
 					frag.isRetr = true
 					// if !r.receiveMemQ.IsDataBlockIn(frag.blockID) {
-					r.receiveQ.ingressChan <- frag
+					r.receiveQ[frag.streamID].ingressChan <- frag
 					// }
 				}
 
@@ -56,7 +60,7 @@ func (r *Receiver) Run() {
 				ack := frag.GetAckBytes()
 				if err == nil {
 					// if !r.receiveMemQ.IsDataBlockIn(frag.blockID) {
-					r.receiveQ.ingressChan <- frag
+					r.receiveQ[frag.streamID].ingressChan <- frag
 					// }
 					// if frag.fragType == int(NORETRANSMIT) {
 					// 	continue
@@ -67,22 +71,25 @@ func (r *Receiver) Run() {
 				frag, err := NewFragmentFromBytes(buf)
 				if err == nil {
 					frag.isParity = true
-					r.receiveQ.ingressChan <- frag
+					r.receiveQ[frag.streamID].ingressChan <- frag
 				}
 			}
 
 		}
 	}()
 
-	go func() {
-		for {
-			block := <-r.receiveQ.egressChan
-			// r.receiveMemQ.InsertBlock(block)
-			if block.canDecode {
-				// fmt.Println(block.blockID, block.currentCount, block.fragmentCount, block.canDecode)
-				r.egressChan <- block
-			}
+	for _, rq := range r.receiveQ {
+		q := rq
+		go func() {
+			for {
+				block := <-q.egressChan
+				// r.receiveMemQ.InsertBlock(block)
+				if block.canDecode {
+					// fmt.Println(block.blockID, block.currentCount, block.fragmentCount, block.canDecode)
+					r.egressChan <- block
+				}
 
-		}
-	}()
+			}
+		}()
+	}
 }

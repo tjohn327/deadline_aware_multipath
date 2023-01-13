@@ -1,7 +1,6 @@
 package main
 
 import (
-	"log"
 	"sync"
 	"time"
 )
@@ -34,21 +33,26 @@ func NewManager(cfg *Config, scheduler *Scheduler, fragSize int,
 }
 
 func (m *Manager) GetParityCount() int {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
+	// m.mutex.Lock()
+	// defer m.mutex.Unlock()
 	return m.parityCount
 }
 
 func (m *Manager) Run() {
 	// rtTime := int64(float64(m.deadline.Milliseconds()) * m.retransmitThreshold)
 	// rtDeadline := time.Duration(rtTime) * time.Millisecond
-	rtDeadline := time.Duration(100+20+10) * time.Millisecond
+	rtDeadline := time.Duration(60+60+10) * time.Millisecond
 
 	// rtDeadline := time.Duration(55 * time.Millisecond)
-	m.scheduler.unAckQ.deadline = &rtDeadline
+	for i := 0; i < numStreams; i++ {
+		m.scheduler.unAckQ[i].deadline = &rtDeadline
+	}
+	// m.scheduler.unAckQ.deadline = &rtDeadline
+	// fmt.Println("                                                             $$$$$$$$$$$$$$$$$$$$$$$$$$$$$Packet loss:")
 	go func() {
 		for {
-			loss := <-m.scheduler.packetLossChan
+			loss := <-pktloss
+			// fmt.Println("                                                             $$$$$$$$$$$$$$$$$$$$$$$$$$$$$Packet asdfasd:")
 			if loss > 70 {
 				continue
 			}
@@ -56,23 +60,23 @@ func (m *Manager) Run() {
 			avg := m.stats.GetMaxPacketLoss()
 
 			newParityCount := int(avg * 1.1)
-			m.mutex.Lock()
+			// m.mutex.Lock()
 			if m.parityCount == 0 {
 				m.parityCount = 1
 			}
 			if newParityCount > m.parityCount*2 {
 				m.parityCount = m.parityCount * 2
 			} else if newParityCount < m.parityCount/2 {
-				m.parityCount = m.parityCount * 3 / 4
+				m.parityCount = m.parityCount / 2
 			} else {
 				m.parityCount = newParityCount
 			}
 			if m.parityCount > MAX_PARITY {
 				m.parityCount = MAX_PARITY
 			}
-			m.mutex.Unlock()
+			// m.mutex.Unlock()
 
-			log.Println("Packet loss:", loss, newParityCount, m.parityCount)
+			// fmt.Println("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$Packet loss:", loss, newParityCount, m.parityCount)
 			// newParityCount := int(loss)
 			// m.parityCount = newParityCount
 			// if newParityCount > m.parityCount {
