@@ -204,7 +204,7 @@ func (c *csvutil) getInChan() chan string {
 
 var test *[]byte
 
-//get random number between 0 and 0.5 from Zipf distribution with 2 decimal places
+// get random number between 0 and 0.5 from Zipf distribution with 2 decimal places
 func getZipf() float64 {
 	zipf := rand.NewZipf(rand.New(rand.NewSource(time.Now().UnixNano())), 1.5, 1, 100)
 	return float64(zipf.Uint64()) / 100
@@ -231,6 +231,7 @@ func runLoss1() {
 				time.Sleep(2 * time.Second)
 			}
 			if time.Since(startTime) > 40*time.Second {
+				reset()
 				return
 			}
 		}
@@ -247,9 +248,24 @@ func runLoss2() {
 			cmd.Run()
 			time.Sleep(200 * time.Millisecond)
 			if time.Since(startTime) > 40*time.Second {
+				reset()
 				return
 			}
 		}
+	}()
+}
+
+func runLoss4() {
+	go func() {
+		losses := []float64{0.0, 0.01, 0.01, 1.0, 2.0, 5.0, 7.0, 10.0}
+		for i := 0; i < len(losses); i++ {
+			command := fmt.Sprintf("sudo tcset veth0 --delay 60ms --rate 100mbps --change --loss %f%%", losses[i])
+			mainloss = losses[i]
+			cmd := exec.Command("bash", "-c", command)
+			cmd.Run()
+			time.Sleep(5 * time.Second)
+		}
+		reset()
 	}()
 }
 

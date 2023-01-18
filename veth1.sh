@@ -1,3 +1,4 @@
+#!/bin/bash
 
 sudo ip netns add ns2
 sudo ip link add veth0 type veth peer name veth1 netns ns2

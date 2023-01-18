@@ -59,6 +59,10 @@ func main() {
 
 	mode = *modeFlag
 
+	if mode == 4 {
+		numStreams = 1
+	}
+
 	runDuration = time.Duration(*duration) * time.Second
 	delayms = *delay
 	cs = createCSVUtil("data.csv")
@@ -91,7 +95,9 @@ func main() {
 	go RunSender(&cfg)
 
 	time.Sleep(1 * time.Second)
-	if mode != 4 {
+	if mode == 4 {
+		runLoss4()
+	} else {
 		runLoss1()
 		runLoss2()
 	}
@@ -176,7 +182,7 @@ func RunSender(cfg *Config) {
 		}
 
 		//create n byte slice and fill random data
-		frameSize := int(cfg.FragSize) * 20
+		frameSize := int(cfg.FragSize) * dataCount
 		data := make([][]byte, numStreams)
 		for i := 0; i < numStreams; i++ {
 			data[i] = make([]byte, frameSize)
@@ -201,9 +207,11 @@ func RunSender(cfg *Config) {
 					blockHeader := make([]byte, 4)
 					binary.BigEndian.PutUint16(blockHeader[:2], uint16(blockID))
 					binary.BigEndian.PutUint16(blockHeader[2:], uint16(i))
+					timedata.sendChan <- TimeEntry{id: blockID, in: t1 - t0, streamID: i}
 					buf := append(blockHeader, data[i]...)
 					_, err := conn.Write(buf)
 					checkNonFatal(err)
+
 					// }()
 				} else {
 
@@ -337,14 +345,19 @@ func RunReceiver(cfg *Config) {
 			for {
 				buf := make([]byte, 2000000)
 				n, err := conn.Read(buf)
+				checkNonFatal(err)
 				fmt.Println("received", n)
 				blockID := int(binary.BigEndian.Uint16(buf[:2]))
 				streamID := int(binary.BigEndian.Uint16(buf[2:4]))
-
-				checkNonFatal(err)
-				// _ := buf[:n]
+				data := buf[4:n]
 				t1 := time.Now().UnixMilli()
-				timedata.receiveChan <- TimeEntry{id: blockID, out: t1 - t0, streamID: streamID}
+				hash := md5.Sum(data)
+				if hash != streamHash[streamID] {
+					log.Println("hash mismatch")
+					timedata.receiveChan <- TimeEntry{id: blockID, out: 0, streamID: streamID}
+				} else {
+					timedata.receiveChan <- TimeEntry{id: blockID, out: t1 - t0, streamID: streamID}
+				}
 
 			}
 		}()

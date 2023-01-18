@@ -4,7 +4,7 @@ deadline = "200ms"
 fragment_size = 1200
 udp_send = "192.168.184.4:5688"
 udp_recv = "192.168.184.3:5688"
-data_count = 5
+data_count = 10
 parity_count = 10
 
 [remote]
