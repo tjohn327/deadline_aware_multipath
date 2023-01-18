@@ -65,6 +65,7 @@ func (td *timeData) run() {
 				if v.diff == 0 {
 					v.diff = 1
 				}
+
 				td.entries[entry.streamID][entry.id] = v
 			}
 		case entry := <-td.receiveParityChan:
@@ -75,14 +76,14 @@ func (td *timeData) run() {
 		case entry := <-td.receiveRetrChan:
 			if v, ok := td.entries[entry.streamID][entry.id]; ok {
 				v.retr = entry.retr
-				// v.loss = entry.loss
-				v.loss = mainloss
+				v.loss = entry.loss
+				// v.loss = mainloss
 				// v.loss = int(csvloss)
 				// v.loss = int(csvloss * 100)
 				td.entries[entry.streamID][entry.id] = v
 			}
-		case <-errChan:
-			return
+			// case <-errChan:
+			// 	return
 		}
 	}
 }
@@ -160,7 +161,7 @@ func (t *timeData) SaveCSV() {
 
 			// 	continue
 			// }
-			writer.WriteString(fmt.Sprintf("%d,%d,%d,%d,%d,%d,%d,%f\n", entry.streamID, entry.id, entry.in, entry.out, entry.diff, (entry.parity*100)/DATA_COUNT, (entry.retr*100)/DATA_COUNT, entry.loss*100))
+			writer.WriteString(fmt.Sprintf("%d,%d,%d,%d,%d,%d,%d,%f\n", entry.streamID, entry.id, entry.in, entry.out, entry.diff, (entry.parity*100)/DATA_COUNT, (entry.retr*100)/DATA_COUNT, entry.loss))
 
 		}
 	}
@@ -257,12 +258,13 @@ func runLoss2() {
 
 func runLoss4() {
 	go func() {
-		losses := []float64{0.0, 0.01, 0.01, 1.0, 2.0, 5.0, 7.0, 10.0}
+		losses := []float64{0.0, 0.01, 0.05, 0.5, 1.0, 2.0, 5.0, 10.0, 0.0}
 		for i := 0; i < len(losses); i++ {
 			command := fmt.Sprintf("sudo tcset veth0 --delay 60ms --rate 100mbps --change --loss %f%%", losses[i])
 			mainloss = losses[i]
 			cmd := exec.Command("bash", "-c", command)
 			cmd.Run()
+			fmt.Printf("Loss: %f", losses[i])
 			time.Sleep(5 * time.Second)
 		}
 		reset()

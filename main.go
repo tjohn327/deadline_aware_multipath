@@ -42,6 +42,7 @@ var (
 	numStreams        = 2
 	csvloss           = 0.0
 	pktloss           = make(chan float64, 1000)
+	run               = true
 
 	// t0             = time.Now().UnixMilli()
 )
@@ -105,14 +106,17 @@ func main() {
 	select {
 	case <-sigCh:
 		log.Println("\nterminating")
+		run = false
 		return
 	case err := <-errChan:
 		check(err)
+		run = false
 	case <-time.After(runDuration):
 		errChan <- fmt.Errorf("timeout")
+		run = false
 		// timedata.PrintAvg()
 
-		time.Sleep(1 * time.Second)
+		time.Sleep(2 * time.Second)
 		timedata.SaveCSV()
 		if mode != 4 {
 			reset()
@@ -203,16 +207,17 @@ func RunSender(cfg *Config) {
 			for i := 0; i < numStreams; i++ {
 
 				if mode == 4 {
-					// go func() {
-					blockHeader := make([]byte, 4)
-					binary.BigEndian.PutUint16(blockHeader[:2], uint16(blockID))
-					binary.BigEndian.PutUint16(blockHeader[2:], uint16(i))
-					timedata.sendChan <- TimeEntry{id: blockID, in: t1 - t0, streamID: i}
-					buf := append(blockHeader, data[i]...)
-					_, err := conn.Write(buf)
-					checkNonFatal(err)
+					data := data[i]
+					go func() {
+						blockHeader := make([]byte, 4)
+						binary.BigEndian.PutUint16(blockHeader[:2], uint16(blockID))
+						binary.BigEndian.PutUint16(blockHeader[2:], uint16(i))
+						timedata.sendChan <- TimeEntry{id: blockID, in: t1 - t0, streamID: i, loss: mainloss}
+						buf := append(blockHeader, data...)
+						_, err := conn.Write(buf)
+						checkNonFatal(err)
 
-					// }()
+					}()
 				} else {
 
 					doEncode := false
@@ -278,6 +283,9 @@ func RunSender(cfg *Config) {
 			}
 
 			time.Sleep(delay)
+			if run == false {
+				break
+			}
 		}
 	}()
 
@@ -346,19 +354,21 @@ func RunReceiver(cfg *Config) {
 				buf := make([]byte, 2000000)
 				n, err := conn.Read(buf)
 				checkNonFatal(err)
-				fmt.Println("received", n)
 				blockID := int(binary.BigEndian.Uint16(buf[:2]))
 				streamID := int(binary.BigEndian.Uint16(buf[2:4]))
 				data := buf[4:n]
+				fmt.Println("received", n, mainloss, blockID)
 				t1 := time.Now().UnixMilli()
 				hash := md5.Sum(data)
 				if hash != streamHash[streamID] {
 					log.Println("hash mismatch")
-					timedata.receiveChan <- TimeEntry{id: blockID, out: 0, streamID: streamID}
+					timedata.receiveChan <- TimeEntry{id: blockID, out: 0, streamID: streamID, loss: mainloss}
 				} else {
-					timedata.receiveChan <- TimeEntry{id: blockID, out: t1 - t0, streamID: streamID}
+					timedata.receiveChan <- TimeEntry{id: blockID, out: t1 - t0, streamID: streamID, loss: mainloss}
 				}
-
+				if run == false {
+					break
+				}
 			}
 		}()
 
@@ -440,6 +450,9 @@ func RunReceiver(cfg *Config) {
 				// 	}
 
 				// }
+				if run == false {
+					break
+				}
 			}
 		}()
 	}
