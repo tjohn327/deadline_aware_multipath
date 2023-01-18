@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"math/rand"
 	"net"
@@ -92,8 +91,10 @@ func main() {
 	go RunSender(&cfg)
 
 	time.Sleep(1 * time.Second)
-	runLoss1()
-	runLoss2()
+	if mode != 4 {
+		runLoss1()
+		runLoss2()
+	}
 
 	select {
 	case <-sigCh:
@@ -107,14 +108,16 @@ func main() {
 
 		time.Sleep(1 * time.Second)
 		timedata.SaveCSV()
-		reset()
+		if mode != 4 {
+			reset()
+		}
 		return
 	}
 }
 
 func RunSender(cfg *Config) {
 	log.Println("starting sender")
-	ingressChan := make(chan []byte, 2000)
+	// ingressChan := make(chan []byte, 2000)
 	scheduler, err := NewScheduler(context.Background(), cfg, numStreams)
 	check(err)
 	manager, err := NewManager(cfg, scheduler, int(cfg.FragSize))
@@ -124,8 +127,8 @@ func RunSender(cfg *Config) {
 	scheduler.Run()
 	manager.Run()
 
-	test_image, err := ioutil.ReadFile("testdata/test_image.jpg")
-	check(err)
+	// test_image, err := ioutil.ReadFile("testdata/test_image.jpg")
+	// check(err)
 
 	// var timestamp_conn net.Conn
 	// if send_telemetry {
@@ -194,10 +197,14 @@ func RunSender(cfg *Config) {
 			for i := 0; i < numStreams; i++ {
 
 				if mode == 4 {
-					go func() {
-						_, err := conn.Write(data[i])
-						checkNonFatal(err)
-					}()
+					// go func() {
+					blockHeader := make([]byte, 4)
+					binary.BigEndian.PutUint16(blockHeader[:2], uint16(blockID))
+					binary.BigEndian.PutUint16(blockHeader[2:], uint16(i))
+					buf := append(blockHeader, data[i]...)
+					_, err := conn.Write(buf)
+					checkNonFatal(err)
+					// }()
 				} else {
 
 					doEncode := false
@@ -266,42 +273,42 @@ func RunSender(cfg *Config) {
 		}
 	}()
 
-	// time.Sleep(1 * time.Second)
-	go func() {
-		// delay := time.Duration(int64(float64(cfg.Deadline.Duration)))
-		delay := time.Duration(time.Millisecond * time.Duration(delayms))
-		if mode == 4 {
-			blockID := 0
-			// csvchan := cs.getInChan()
-			for {
-				buf := make([]byte, len(test_image))
-				copy(buf, test_image)
-				blockHeader := make([]byte, 2)
-				binary.BigEndian.PutUint16(blockHeader, uint16(blockID))
-				buf = append(blockHeader, buf...)
-				t1 := time.Now().UnixMilli()
+	// // time.Sleep(1 * time.Second)
+	// go func() {
+	// 	// delay := time.Duration(int64(float64(cfg.Deadline.Duration)))
+	// 	delay := time.Duration(time.Millisecond * time.Duration(delayms))
+	// 	if mode == 4 {
+	// 		blockID := 0
+	// 		// csvchan := cs.getInChan()
+	// 		for {
+	// 			buf := make([]byte, len(test_image))
+	// 			copy(buf, test_image)
+	// 			blockHeader := make([]byte, 2)
+	// 			binary.BigEndian.PutUint16(blockHeader, uint16(blockID))
+	// 			buf = append(blockHeader, buf...)
+	// 			t1 := time.Now().UnixMilli()
 
-				// entry := fmt.Sprintf("%d,send,%d,%d\n", t1-t0, blockID, 0)
-				// csvchan <- entry
-				timedata.sendChan <- TimeEntry{id: blockID, in: t1 - t0, parity: 0}
-				ingressChan <- buf
-				if blockID > 65534 {
-					blockID = 0
-				} else {
-					blockID++
-				}
-				time.Sleep(delay)
-			}
-		} else {
+	// 			// entry := fmt.Sprintf("%d,send,%d,%d\n", t1-t0, blockID, 0)
+	// 			// csvchan <- entry
+	// 			timedata.sendChan <- TimeEntry{id: blockID, in: t1 - t0, parity: 0}
+	// 			ingressChan <- buf
+	// 			if blockID > 65534 {
+	// 				blockID = 0
+	// 			} else {
+	// 				blockID++
+	// 			}
+	// 			time.Sleep(delay)
+	// 		}
+	// 	} else {
 
-			// for {
-			// 	buf := make([]byte, len(test_image))
-			// 	copy(buf, test_image)
-			// 	ingressChan <- buf
-			// 	time.Sleep(delay)
-			// }
-		}
-	}()
+	// 		// for {
+	// 		// 	buf := make([]byte, len(test_image))
+	// 		// 	copy(buf, test_image)
+	// 		// 	ingressChan <- buf
+	// 		// 	time.Sleep(delay)
+	// 		// }
+	// 	}
+	// }()
 
 }
 
@@ -310,7 +317,7 @@ func RunReceiver(cfg *Config) {
 
 	// test_image_hash := [16]byte{105, 162, 92, 131, 191, 110, 214, 187, 153, 225, 26, 200, 95, 97, 227, 55}
 
-	egressChan := make(chan []byte, 500)
+	// egressChan := make(chan []byte, 500)
 
 	if mode == 4 {
 		go func() {
@@ -331,8 +338,13 @@ func RunReceiver(cfg *Config) {
 				buf := make([]byte, 2000000)
 				n, err := conn.Read(buf)
 				fmt.Println("received", n)
+				blockID := int(binary.BigEndian.Uint16(buf[:2]))
+				streamID := int(binary.BigEndian.Uint16(buf[2:4]))
+
 				checkNonFatal(err)
-				egressChan <- buf[:n]
+				// _ := buf[:n]
+				t1 := time.Now().UnixMilli()
+				timedata.receiveChan <- TimeEntry{id: blockID, out: t1 - t0, streamID: streamID}
 
 			}
 		}()
