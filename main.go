@@ -3,17 +3,24 @@ package main
 import (
 	"context"
 	"crypto/md5"
-	"encoding/binary"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"flag"
 	"fmt"
 	"log"
-	"math/rand"
+	"math/big"
+
+	mrand "math/rand"
 	"net"
 	"os"
 	"os/signal"
 	"runtime"
 	"time"
 
+	quic "github.com/Abdoueck632/mp-quic"
 	"github.com/BurntSushi/toml"
 	"github.com/vishvananda/netns"
 )
@@ -30,22 +37,42 @@ var (
 	TEST_UDP          = true
 	cs                *csvutil
 	t0                = time.Now().UnixMilli()
-	timedata          timeData
+	Timedata          timeData
 	delayms           = 20
-	mode              = 3 // 0 udp 1 retr 2 fec 3 fec+retr
+	mode              = 3 // 0 udp 1 retr 2 fec 3 fec+retr 4 mptcp 5 mpquic
 	runDuration       = time.Duration(10 * time.Second)
-	DATA_COUNT        = 30
-	MAX_PARITY        = 6
+	DATA_COUNT        = 20
+	MAX_PARITY        = DATA_COUNT / 5
 	receiveParityChan = make(chan TimeEntry, 2000)
 	receiveRetrChan   = make(chan TimeEntry, 2000)
 	streamHash        = make(map[int][16]byte)
-	numStreams        = 2
+	numStreams        = 1
 	csvloss           = 0.0
 	pktloss           = make(chan float64, 1000)
 	run               = true
 
 	// t0             = time.Now().UnixMilli()
 )
+
+func generateTLSConfig() *tls.Config {
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		panic(err)
+	}
+	template := x509.Certificate{SerialNumber: big.NewInt(1)}
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		panic(err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+
+	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		panic(err)
+	}
+	return &tls.Config{Certificates: []tls.Certificate{tlsCert}}
+}
 
 func main() {
 	sigCh := make(chan os.Signal, 1)
@@ -59,8 +86,11 @@ func main() {
 	flag.Parse()
 
 	mode = *modeFlag
+	// utils.SetLogLevel(utils.LogLevelInfo)
 
-	if mode == 4 {
+	// utils.SetLogLevel(utils.LogLevelDebug)
+
+	if mode >= 4 {
 		numStreams = 1
 	}
 
@@ -84,10 +114,10 @@ func main() {
 	parityCount = int(cfg.ParityCount)
 	deadline = cfg.Deadline.Duration
 
-	timedata = NewTimeData(*filename, int(deadline.Milliseconds()))
-	timedata.receiveParityChan = receiveParityChan
-	timedata.receiveRetrChan = receiveRetrChan
-	go timedata.run()
+	Timedata = NewTimeData(*filename, int(deadline.Milliseconds()))
+	Timedata.receiveParityChan = receiveParityChan
+	Timedata.receiveRetrChan = receiveRetrChan
+	go Timedata.run()
 
 	t0 = time.Now().UnixMilli()
 
@@ -96,7 +126,7 @@ func main() {
 	go RunSender(&cfg)
 
 	time.Sleep(1 * time.Second)
-	if mode == 4 {
+	if mode == 4 || true {
 		runLoss4()
 	} else {
 		runLoss1()
@@ -117,13 +147,15 @@ func main() {
 		// timedata.PrintAvg()
 
 		time.Sleep(2 * time.Second)
-		timedata.SaveCSV()
+		Timedata.SaveCSV()
 		if mode != 4 {
 			reset()
 		}
 		return
 	}
 }
+
+var blockIDR = 0
 
 func RunSender(cfg *Config) {
 	log.Println("starting sender")
@@ -180,8 +212,20 @@ func RunSender(cfg *Config) {
 		time.Sleep(1 * time.Millisecond)
 		// t0 = time.Now().UnixMilli()
 		var conn net.Conn
+		var stream quic.Stream
+		recvaddr := "10.1.0.2:5555"
 		if mode == 4 {
-			conn, err = net.Dial("tcp", "10.1.0.2:5555")
+			conn, err = net.Dial("tcp", recvaddr)
+			check(err)
+
+		} else if mode == 5 {
+			quicConfig := &quic.Config{
+				CreatePaths: true,
+			}
+
+			session, err := quic.DialAddr(recvaddr, &tls.Config{InsecureSkipVerify: true}, quicConfig)
+			check(err)
+			stream, err = session.OpenStreamSync()
 			check(err)
 		}
 
@@ -191,89 +235,99 @@ func RunSender(cfg *Config) {
 		for i := 0; i < numStreams; i++ {
 			data[i] = make([]byte, frameSize)
 			for j := 0; j < frameSize; j++ {
-				data[i][j] = byte(rand.Intn(256))
+				data[i][j] = byte(mrand.Intn(256))
 			}
 		}
 		// calculate hash of data
 		for i := 0; i < numStreams; i++ {
 			streamHash[i] = md5.Sum(data[i])
 		}
+		time.Sleep(500 * time.Millisecond)
 
 		delay := time.Duration(time.Millisecond * time.Duration(delayms))
 		for {
 			// data := <-ingressChan
+			tsent := time.Now()
 			t1 := time.Now().UnixMilli()
 
 			for i := 0; i < numStreams; i++ {
 
-				if mode == 4 {
-					data := data[i]
-					go func() {
-						blockHeader := make([]byte, 4)
-						binary.BigEndian.PutUint16(blockHeader[:2], uint16(blockID))
-						binary.BigEndian.PutUint16(blockHeader[2:], uint16(i))
-						timedata.sendChan <- TimeEntry{id: blockID, in: t1 - t0, streamID: i, loss: mainloss}
-						buf := append(blockHeader, data...)
-						_, err := conn.Write(buf)
-						checkNonFatal(err)
-
-					}()
-				} else {
-
-					doEncode := false
-					if mode > 1 {
-						doEncode = true
-					}
-
-					// pkts := make([][]byte, dataCount)
-					// for i := 0; i < dataCount; i++ {
-					// 	pkts[i] = <-ingressChan
-					// 	// h, err := parseRTPH264Header(pkts[i][2:])
-					// 	// check(err)
-					// 	// if h.IsIDR {
-					// 	// 	doEncode = true
-					// 	// }
-					// }
-					split, err := Split(data[i], manager.fragSize)
-					// split := &SplitData{
-					// 	fragSize:      pktSize,
-					// 	padlen:        0,
-					// 	fragmentCount: dataCount,
-					// 	data:          pkts,
-					// }
-					_parityCount := manager.GetParityCount()
-					// receiveParityChan <- TimeEntry{id: blockID, parity: _parityCount}
-					// _parityCount := 2
-					if !doEncode {
-						_parityCount = 0
-					}
-					if _parityCount > MAX_PARITY {
-						_parityCount = MAX_PARITY
-					}
-					encodedData, err := decoders[_parityCount].Encode(split, _parityCount)
-					checkNonFatal(err)
-					retransmit := true
-					if mode == 0 || mode == 2 {
-						retransmit = false
-					}
-					if i == 0 {
-						retransmit = true
-					} else {
-						retransmit = true
-					}
-					db := NewDataBlockFromEncodedDataOption(encodedData, blockID, retransmit, i)
-					// if send_telemetry {
-					// 	blockid := fmt.Sprintf(`{"blockid":"%d"}`, db.blockID)
-					// 	log.Println("send", blockid)
-					// 	timestamp_conn.Write([]byte(blockid))
-					// }
-					// entry := fmt.Sprintf("%d %d,send,%d,%d\n", db.streamID, db.blockID, t1-t0, db.parityCount)
-					// fmt.Print(entry)
-					// csvchan <- entry
-					scheduler.Send(db)
-					timedata.sendChan <- TimeEntry{id: db.blockID, in: t1 - t0, parity: db.parityCount, streamID: i}
+				doEncode := false
+				if mode > 1 && mode < 4 {
+					doEncode = true
 				}
-				time.Sleep(1 * time.Millisecond)
+
+				// pkts := make([][]byte, dataCount)
+				// for i := 0; i < dataCount; i++ {
+				// 	pkts[i] = <-ingressChan
+				// 	// h, err := parseRTPH264Header(pkts[i][2:])
+				// 	// check(err)
+				// 	// if h.IsIDR {
+				// 	// 	doEncode = true
+				// 	// }
+				// }
+				split, err := Split(data[i], manager.fragSize)
+				checkNonFatal(err)
+				// split := &SplitData{
+				// 	fragSize:      pktSize,
+				// 	padlen:        0,
+				// 	fragmentCount: dataCount,
+				// 	data:          pkts,
+				// }
+				_parityCount := manager.GetParityCount()
+				// receiveParityChan <- TimeEntry{id: blockID, parity: _parityCount}
+				// _parityCount := 2
+				if !doEncode {
+					_parityCount = 0
+				} else {
+					// _parityCount = MAX_PARITY
+				}
+				if _parityCount > MAX_PARITY {
+					_parityCount = MAX_PARITY
+				}
+				// _parityCount = int(mainloss / 100 * float64(dataCount) * 1.1)
+				encodedData, err := decoders[_parityCount].Encode(split, _parityCount)
+				checkNonFatal(err)
+				retransmit := true
+				if mode == 0 || mode == 2 {
+					retransmit = false
+				}
+				// if i == 0 {
+				// 	retransmit = true
+				// } else {
+				// 	retransmit = true
+				// }
+				db := NewDataBlockFromEncodedDataOption(encodedData, blockID, retransmit, i)
+				// if send_telemetry {
+				// 	blockid := fmt.Sprintf(`{"blockid":"%d"}`, db.blockID)
+				// 	log.Println("send", blockid)
+				// 	timestamp_conn.Write([]byte(blockid))
+				// }
+				// entry := fmt.Sprintf("%d %d,send,%d,%d\n", db.streamID, db.blockID, t1-t0, db.parityCount)
+				// fmt.Print(entry)
+				// csvchan <- entry
+				if mode >= 4 {
+					fmt.Println("block", db.blockID, db.parityCount, db.fragmentCount)
+					for i := 0; i < len(db.fragments); i++ {
+						buf := db.fragments[i].data
+						// go func(buf []byte) {
+						//
+						// fmt.Println("fragsent", db.fragments[i].blockID, db.fragments[i].fragmentID, db.fragments[i].fragmentCount, len(db.fragments[i].data))
+						if mode == 4 {
+							conn.Write(buf)
+							// checkNonFatal(err)
+						} else if mode == 5 {
+							stream.Write(buf)
+							// checkNonFatal(err)
+						}
+						// }(buf)
+						// time.Sleep(5 * time.Microsecond)
+					}
+				} else {
+					scheduler.Send(db)
+				}
+				Timedata.sendChan <- TimeEntry{id: db.blockID, in: t1 - t0, parity: db.parityCount, streamID: i, loss: mainloss}
+
 			}
 
 			if blockID > 65534 {
@@ -281,8 +335,14 @@ func RunSender(cfg *Config) {
 			} else {
 				blockID++
 			}
+			blockIDR = blockID
 
-			time.Sleep(delay)
+			for {
+				time.Sleep(1 * time.Millisecond)
+				if time.Now().Sub(tsent) > delay {
+					break
+				}
+			}
 			if run == false {
 				break
 			}
@@ -334,8 +394,12 @@ func RunReceiver(cfg *Config) {
 	// test_image_hash := [16]byte{105, 162, 92, 131, 191, 110, 214, 187, 153, 225, 26, 200, 95, 97, 227, 55}
 
 	// egressChan := make(chan []byte, 500)
+	decoders := make([]*ReedSolomon, MAX_PARITY+1)
+	for i := 0; i <= MAX_PARITY; i++ {
+		decoders[i], _ = NewReedSolomon(DATA_COUNT, i)
+	}
 
-	if mode == 4 {
+	if mode >= 4 {
 		go func() {
 			ns, err := netns.GetFromName("ns2")
 			if err != nil {
@@ -347,26 +411,79 @@ func RunReceiver(cfg *Config) {
 			if err := netns.Set(ns); err != nil {
 				checkNonFatal(err)
 			}
-			listener, _ := net.Listen("tcp", "10.1.0.2:5555")
-			conn, err := listener.Accept()
-			checkNonFatal(err)
-			for {
-				buf := make([]byte, 2000000)
-				n, err := conn.Read(buf)
+
+			recvqueue := NewDataQueue(Receive, nil, nil, nil, nil, 0)
+			var conn net.Conn
+			var stream quic.Stream
+			if mode == 4 {
+				listener, _ := net.Listen("tcp", "10.1.0.2:5555")
+				conn, err = listener.Accept()
 				checkNonFatal(err)
-				blockID := int(binary.BigEndian.Uint16(buf[:2]))
-				streamID := int(binary.BigEndian.Uint16(buf[2:4]))
-				data := buf[4:n]
-				fmt.Println("received", n, mainloss, blockID)
-				t1 := time.Now().UnixMilli()
-				hash := md5.Sum(data)
-				if hash != streamHash[streamID] {
-					log.Println("hash mismatch")
-					timedata.receiveChan <- TimeEntry{id: blockID, out: 0, streamID: streamID, loss: mainloss}
-				} else {
-					timedata.receiveChan <- TimeEntry{id: blockID, out: t1 - t0, streamID: streamID, loss: mainloss}
+			} else if mode == 5 {
+				listener, err := quic.ListenAddr("10.1.0.2:5555", generateTLSConfig(), nil)
+				check(err)
+				sess, err := listener.Accept()
+				check(err)
+				stream, err = sess.AcceptStream()
+				check(err)
+			}
+
+			go func() {
+				for {
+					buf := make([]byte, 1210)
+					var n int
+					var err error
+					if mode == 4 {
+						n, err = conn.Read(buf)
+					} else if mode == 5 {
+						n, err = stream.Read(buf)
+					}
+					// checkNonFatal(err)
+					if err != nil {
+						continue
+					}
+					frag, err := NewFragmentFromBytes(buf[:n])
+					checkNonFatal(err)
+					if err != nil || frag.blockID > blockIDR+100 || n != 1210 {
+						continue
+					}
+					// fmt.Println("fragrecv", frag.blockID, frag.fragmentID, frag.fragmentCount, frag.parityCount, len(frag.data))
+					//
+					if err == nil {
+						recvqueue.ingressChan <- frag
+					}
+					if !run {
+						break
+					}
 				}
-				if run == false {
+			}()
+			for {
+				db := <-recvqueue.egressChan
+				if !db.canDecode {
+					fmt.Println("cant decode", db.blockID)
+					fmt.Println(db.blockID, db.currentCount, db.fragmentCount, db.canDecode)
+					continue
+				}
+
+				fmt.Println("recevd", db.blockID, db.currentCount, db.fragmentCount, db.canDecode)
+
+				encodedData, err := db.GetEncodedData()
+				checkNonFatal(err)
+				data, err := decoders[0].Decode(encodedData)
+				checkNonFatal(err)
+				// egressChan <- data
+				hash := md5.Sum(data)
+				if hash == streamHash[db.streamID] {
+					t1 := time.Now().UnixMilli()
+					Timedata.ReceiveChan <- TimeEntry{id: db.blockID, out: t1 - t0, streamID: db.streamID}
+
+					entry := fmt.Sprintf("%d %d,receive,%d,%d\n", db.streamID, db.blockID, t1-t0, db.parityCount)
+					fmt.Println(entry)
+					// csvchan <- entry
+				} else {
+					fmt.Println("hash mismatch")
+				}
+				if !run {
 					break
 				}
 			}
@@ -385,10 +502,7 @@ func RunReceiver(cfg *Config) {
 		// }
 		go func() {
 			// csvchan := cs.getInChan()
-			decoders := make([]*ReedSolomon, MAX_PARITY+1)
-			for i := 0; i <= MAX_PARITY; i++ {
-				decoders[i], _ = NewReedSolomon(DATA_COUNT, i)
-			}
+
 			// prevBlock := -1
 			for {
 				db := <-receiver.egressChan
@@ -414,13 +528,19 @@ func RunReceiver(cfg *Config) {
 				// log.Printf("received block %d\n", db.blockID)
 				encodedData, err := db.GetEncodedData()
 				checkNonFatal(err)
+				if err != nil {
+					continue
+				}
 				data, err := decoders[db.parityCount].Decode(encodedData)
 				checkNonFatal(err)
+				if err != nil {
+					continue
+				}
 				// egressChan <- data
 				hash := md5.Sum(data)
 				if hash == streamHash[db.streamID] {
 					t1 := time.Now().UnixMilli()
-					timedata.receiveChan <- TimeEntry{id: db.blockID, out: t1 - t0, streamID: db.streamID}
+					Timedata.ReceiveChan <- TimeEntry{id: db.blockID, out: t1 - t0, streamID: db.streamID}
 
 					// entry := fmt.Sprintf("%d %d,receive,%d,%d\n", db.streamID, db.blockID, t1-t0, db.parityCount)
 					// fmt.Println(entry)

@@ -20,31 +20,51 @@ type TimeEntry struct {
 	parity   int
 	retr     int
 	loss     float64
+	path1    int
+	path2    int
 	streamID int
 }
+
+var (
+	lastBandwidthMeasurement time.Time
+	lastBandwidthsIN         map[string]int
+	lastBandwidthsOUT        map[string]int
+)
 
 type timeData struct {
 	filename          string
 	deadline          int
 	sendChan          chan TimeEntry
-	receiveChan       chan TimeEntry
+	ReceiveChan       chan TimeEntry
 	receiveLossChan   chan TimeEntry
 	receiveParityChan chan TimeEntry
 	receiveRetrChan   chan TimeEntry
 	entries           map[int]map[int]TimeEntry
+	startTime         time.Time
 }
 
 func NewTimeData(filename string, deadline int) timeData {
+	start := time.Now()
 	return timeData{
 		filename:    filename,
 		deadline:    deadline,
 		sendChan:    make(chan TimeEntry, 2000),
-		receiveChan: make(chan TimeEntry, 2000),
+		ReceiveChan: make(chan TimeEntry, 2000),
 		entries:     make(map[int]map[int]TimeEntry),
+		startTime:   start,
 	}
 }
 
 func (td *timeData) run() {
+	lastBandwidthMeasurement = time.Now()
+	ifaces := []string{"veth0", "veth2"}
+	lastBandwidthsIN = make(map[string]int)
+	lastBandwidthsOUT = make(map[string]int)
+	for _, iface := range ifaces {
+		lastBandwidthsIN[iface] = 0
+		lastBandwidthsOUT[iface] = 0
+	}
+	getBandwidthUsage(ifaces)
 	for {
 		select {
 		case entry := <-td.sendChan:
@@ -54,7 +74,7 @@ func (td *timeData) run() {
 			} else {
 				td.entries[entry.streamID][entry.id] = entry
 			}
-		case entry := <-td.receiveChan:
+		case entry := <-td.ReceiveChan:
 			if v, ok := td.entries[entry.streamID][entry.id]; ok {
 				v.out = entry.out
 				if v.out == 0 {
@@ -65,8 +85,12 @@ func (td *timeData) run() {
 				if v.diff == 0 {
 					v.diff = 1
 				}
-
+				bws := getBandwidthUsage(ifaces)
+				v.path1 = int(bws[0])
+				v.path2 = int(bws[1])
 				td.entries[entry.streamID][entry.id] = v
+
+				fmt.Println("bw", v.path1, v.path2)
 			}
 		case entry := <-td.receiveParityChan:
 			if v, ok := td.entries[entry.streamID][entry.id]; ok {
@@ -76,7 +100,7 @@ func (td *timeData) run() {
 		case entry := <-td.receiveRetrChan:
 			if v, ok := td.entries[entry.streamID][entry.id]; ok {
 				v.retr = entry.retr
-				v.loss = entry.loss
+				// v.loss = entry.loss
 				// v.loss = mainloss
 				// v.loss = int(csvloss)
 				// v.loss = int(csvloss * 100)
@@ -86,6 +110,44 @@ func (td *timeData) run() {
 			// 	return
 		}
 	}
+}
+
+func stringToFloat64(s string) float64 {
+	var result float64
+	fmt.Sscanf(s, "%f", &result)
+	return result
+}
+
+// get the bandwidth usage in bytes per second for the given interface
+func getBandwidthUsage(ifaces []string) []float64 {
+
+	var bandwidthUsage []float64
+	// get the current time
+	now := time.Now()
+	// get the time since the last measurement
+	elapsed := now.Sub(lastBandwidthMeasurement)
+	// update the last measurement time
+	lastBandwidthMeasurement = now
+	for _, iface := range ifaces {
+		// get the bytes sent and received since the last measurement
+		out, err := exec.Command("cat", "/sys/class/net/"+iface+"/statistics/tx_bytes").Output()
+		if err != nil {
+			panic(err)
+		}
+		in, err := exec.Command("cat", "/sys/class/net/"+iface+"/statistics/rx_bytes").Output()
+		if err != nil {
+			panic(err)
+		}
+		// calculate the bandwidth usage in bytes per second
+		outBytes := stringToFloat64(string(out))
+		outB := outBytes - float64(lastBandwidthsOUT[iface])
+		lastBandwidthsOUT[iface] = int(outBytes)
+		inBytes := stringToFloat64(string(in))
+		inB := inBytes - float64(lastBandwidthsIN[iface])
+		lastBandwidthsIN[iface] = int(inBytes)
+		bandwidthUsage = append(bandwidthUsage, ((outB+inB)/elapsed.Seconds())/1000)
+	}
+	return bandwidthUsage
 }
 
 func (t *timeData) AddIn(streamID int, id int, in int64) {
@@ -161,7 +223,11 @@ func (t *timeData) SaveCSV() {
 
 			// 	continue
 			// }
-			writer.WriteString(fmt.Sprintf("%d,%d,%d,%d,%d,%d,%d,%f\n", entry.streamID, entry.id, entry.in, entry.out, entry.diff, (entry.parity*100)/DATA_COUNT, (entry.retr*100)/DATA_COUNT, entry.loss))
+			writer.WriteString(fmt.Sprintf("%d,%d,%d,%d,%d,%d,%d,%f,%f,%d,%d\n",
+				entry.streamID, entry.id, entry.in, entry.out, entry.diff, (entry.parity*100)/DATA_COUNT,
+				(entry.retr*100)/DATA_COUNT, entry.loss,
+				float32(entry.parity+entry.retr)*100/float32(DATA_COUNT),
+				entry.path1, entry.path2))
 
 		}
 	}
@@ -258,13 +324,20 @@ func runLoss2() {
 
 func runLoss4() {
 	go func() {
-		losses := []float64{0.0, 0.01, 0.05, 0.5, 1.0, 2.0, 5.0, 10.0, 0.0}
+		losses := []float64{0.0, 0.01, 0.05, 0.5, 1.0, 2.0, 5.0, 10.0}
 		for i := 0; i < len(losses); i++ {
-			command := fmt.Sprintf("sudo tcset veth0 --delay 60ms --rate 100mbps --change --loss %f%%", losses[i])
+			inf := "veth2"
+			if mode >= 4 {
+				inf = "veth0"
+			}
+			command := fmt.Sprintf("sudo tcset %s --delay 60ms --rate 100mbps --change --loss %f%%", inf, losses[i])
 			mainloss = losses[i]
 			cmd := exec.Command("bash", "-c", command)
-			cmd.Run()
-			fmt.Printf("Loss: %f", losses[i])
+			err := cmd.Run()
+			if err != nil {
+				fmt.Println(err)
+			}
+			fmt.Printf("Loss: %f\n", losses[i])
 			time.Sleep(5 * time.Second)
 		}
 		reset()
@@ -275,6 +348,7 @@ func reset() {
 	command := fmt.Sprintf("sudo tcset veth2 --delay 60ms --rate 100mbps --change --loss %f%%", 0.0)
 	cmd := exec.Command("bash", "-c", command)
 	cmd.Run()
+	mainloss = 0.0
 	command = fmt.Sprintf("sudo tcset veth0 --delay 60ms --rate 100mbps --change --loss %f%%", 0.0)
 	cmd = exec.Command("bash", "-c", command)
 	cmd.Run()

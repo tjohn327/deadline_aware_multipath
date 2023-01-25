@@ -75,6 +75,10 @@ func (s *SplitData) Print() {
 func (s *SplitData) Join() ([]byte, error) {
 	size := (s.fragSize * s.fragmentCount) - s.padlen
 	out := make([]byte, 0)
+	if s.padlen > s.fragSize {
+		err := fmt.Errorf("error joining the split data")
+		return nil, err
+	}
 	for i := range s.data {
 		if i < s.fragmentCount-1 {
 			out = append(out, s.data[i]...)

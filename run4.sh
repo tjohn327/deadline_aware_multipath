@@ -1,4 +1,5 @@
 #!/bin/bash
+
 go build
 
 # sudo tcset veth0 --delay 60ms --rate 100mbps --change
@@ -9,9 +10,11 @@ go build
 # cd /home/ubuntu/code/DARM/intial_eval/deadline_aware_multipath
 # sudo mptcpize run ./deadline_aware_multipath -f /media/sf_SharedUbuntu/combined4.csv -t 50 -m 3 -d 20 &
 
-# sudo ./deadline_aware_multipath -f /media/sf_SharedUbuntu/combined5 -t 50 -m 4 -d 20 
+sudo ./deadline_aware_multipath -f /home/ubuntu/code/shared/combined6 -t 50 -m 3 -d 20 
 # sudo ./deadline_aware_multipath -f /code/shared/mptcp -t 50 -m 4 -d 20 
-sudo mptcpize run ./deadline_aware_multipath -f /home/scion/code/shared/mptcp -t 50 -m 4 -d 20 
+# sudo mptcpize run ./deadline_aware_multipath -f /home/scion/code/shared/mptcp -t 50 -m 4 -d 20 
+# sudo mptcpize run ./deadline_aware_multipath -f /home/ubuntu/code/shared/mptcp -t 50 -m 4 -d 20 
+
 
 
 

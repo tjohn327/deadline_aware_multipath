@@ -62,12 +62,12 @@ func (m *Manager) Run() {
 			newParityCount := int(avg * 1.1)
 			// m.mutex.Lock()
 			if m.parityCount == 0 {
-				m.parityCount = 1
+				m.parityCount = 0
 			}
-			if newParityCount > m.parityCount*2 {
-				m.parityCount = m.parityCount * 2
-			} else if newParityCount < m.parityCount/2 {
-				m.parityCount = m.parityCount / 2
+			if newParityCount > m.parityCount {
+				m.parityCount = newParityCount
+			} else if newParityCount < m.parityCount/2 && m.parityCount > 1 {
+				m.parityCount = m.parityCount - 1
 			} else {
 				m.parityCount = newParityCount
 			}

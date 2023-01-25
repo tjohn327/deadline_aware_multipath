@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"sync"
 	"time"
 )
@@ -43,6 +44,10 @@ func NewDataQueue(t DataQueueType, ingressChan chan *DataFragment, egressChan ch
 
 	if ingressChan == nil {
 		ingressChan = make(chan *DataFragment, 200)
+	}
+
+	if egressChan == nil {
+		egressChan = make(chan *DataBlock, 200)
 	}
 
 	dq := &DataQueue{
@@ -192,7 +197,7 @@ func (dq *DataQueue) isBlockIDInQueue(blockID int) (int, bool) {
 }
 
 func (dq *DataQueue) eject() {
-	time.Sleep(60 * time.Millisecond)
+	// time.Sleep(130 * time.Millisecond)
 	// deadline := time.Duration((20) * time.Millisecond)
 	// timer := time.NewTimer(deadline)
 	// <-timer.C
@@ -203,8 +208,14 @@ func (dq *DataQueue) eject() {
 				out := dq.Dequeue()
 				dq.prevCompleteBlockId = out.blockID
 				dq.egressChan <- out
+			} else if time.Now().Sub(dq.blocks[dq.head].inTime) > 150*time.Millisecond {
+				out := dq.Dequeue()
+				dq.prevCompleteBlockId = out.blockID
+				Timedata.ReceiveChan <- TimeEntry{streamID: out.streamID, id: out.blockID, retr: 0, loss: 0, out: 0, parity: out.parityCount}
+				fmt.Printf("missed eject- stream %d block: %d fragments: %d  %f \n", out.streamID, out.blockID, out.unackedCount, float64(out.unackedCount))
 			}
 			// else {
+
 			// 	if dq.blocks[(dq.head+1)%dq.len].canDecode {
 			// 	dq.Dequeue()
 			// 	out := dq.Dequeue()
@@ -241,6 +252,7 @@ func (dq *DataQueue) InsertFragment(f *DataFragment) {
 		// }
 	} else {
 		db := NewDataBlockFromFragment(f)
+		db.inTime = time.Now()
 		dq.Enqueue(db)
 		if !dq.started {
 			dq.started = true
